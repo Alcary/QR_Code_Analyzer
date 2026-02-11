@@ -1,0 +1,46 @@
+# === General ===
+.DS_Store
+*.pem
+.env*.local
+
+# === Mobile App (qr-security-scanner) ===
+qr-security-scanner/node_modules/
+qr-security-scanner/.expo/
+qr-security-scanner/dist/
+qr-security-scanner/web-build/
+qr-security-scanner/.kotlin/
+qr-security-scanner/*.orig.*
+qr-security-scanner/*.jks
+qr-security-scanner/*.p8
+qr-security-scanner/*.p12
+qr-security-scanner/*.key
+qr-security-scanner/*.mobileprovision
+qr-security-scanner/.metro-health-check*
+qr-security-scanner/npm-debug.*
+qr-security-scanner/yarn-debug.*
+qr-security-scanner/yarn-error.*
+qr-security-scanner/*.tsbuildinfo
+qr-security-scanner/app-example/
+qr-security-scanner/ios/
+qr-security-scanner/android/
+
+# === Server (qr-security-server) ===
+qr-security-server/__pycache__/
+qr-security-server/**/__pycache__/
+qr-security-server/.env
+qr-security-server/venv/
+qr-security-server/.venv/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# === IDE ===
+.vscode/
+.idea/
+
+# === Expo root-level artifacts ===
+.expo/
