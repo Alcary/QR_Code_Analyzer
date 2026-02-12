@@ -1,11 +1,31 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.endpoints import scan
 from app.core.config import settings
 
-app = FastAPI(title=settings.PROJECT_NAME)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-# Set all CORS enabled origins
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: eagerly load ML models so first request isn't slow."""
+    from app.services.ml.predictor import predictor  # noqa: F401
+
+    logger.info("ML models loaded: %s", predictor.loaded)
+    yield
+    logger.info("Shutting down")
+
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
 if settings.BACKEND_CORS_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
@@ -16,6 +36,7 @@ if settings.BACKEND_CORS_ORIGINS:
     )
 
 app.include_router(scan.router, prefix=settings.API_V1_STR)
+
 
 @app.get("/")
 def read_root():

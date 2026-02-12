@@ -1,18 +1,18 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
-requests
-python-dotenv
-aiohttp
-dnspython
-cachetools
 pydantic-settings
+python-dotenv
+# ML
+xgboost
 scikit-learn
 joblib
 numpy
-pandas
-tqdm
-xgboost
 torch
 transformers
+# Network analysis
+aiohttp
+dnspython
 tldextract
+cachetools
+python-whois

@@ -1,309 +1,302 @@
 """
-URL Feature Extraction for Heuristic Analysis
+URL Feature Extraction for ML Model
 
-This module extracts lexical and statistical features from URLs
-to complement ML predictions and reduce false positives.
+IMPORTANT: This module MUST produce features identical to the training notebook
+(Model_Training_Colab.ipynb). Any changes here must also be reflected there.
+The feature names and their order are verified against feature_names.json at startup.
 """
 
 import re
 import math
+import numpy as np
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
-from typing import NamedTuple
 
 
-class URLFeatures(NamedTuple):
-    """Structured URL features for analysis."""
-    # Basic metrics
-    url_length: int
-    domain_length: int
-    path_length: int
-    query_length: int
-    
-    # Entropy (randomness measure)
-    domain_entropy: float
-    path_entropy: float
-    full_entropy: float
-    
-    # Structural features
-    subdomain_count: int
-    path_depth: int
-    query_param_count: int
-    
-    # Suspicious indicators
-    has_ip_address: bool
-    has_port: bool
-    has_at_symbol: bool
-    has_double_slash_redirect: bool
-    has_hex_encoding: bool
-    digit_ratio: float
-    special_char_ratio: float
-    
-    # TLD info
-    tld: str
-    is_suspicious_tld: bool
-    
-    # Computed risk score (0.0 - 1.0)
-    heuristic_risk_score: float
+# ═══════════════════════════════════════════════════════════════
+# Keyword / Pattern Dictionaries — MUST match notebook exactly
+# ═══════════════════════════════════════════════════════════════
 
-
-# Suspicious TLDs often used in phishing/malware
 SUSPICIOUS_TLDS = frozenset({
-    "tk", "ml", "ga", "cf", "gq",  # Free TLDs heavily abused
-    "top", "xyz", "club", "work", "click", "link", "surf",
-    "buzz", "fun", "monster", "quest", "cam", "icu",
-    "pw", "cc", "ws", "info", "biz", "su", "ru", "cn",
+    "tk", "ml", "ga", "cf", "gq", "pw", "top", "xyz", "club", "work",
+    "click", "link", "surf", "buzz", "fun", "monster", "quest", "cam",
+    "icu", "cc", "ws", "info", "biz", "su", "ru", "cn", "online", "site",
+    "website", "space", "tech", "store", "stream", "download", "win",
+    "review", "racing", "cricket", "science", "party", "gdn", "loan",
+    "men", "country", "kim", "date", "faith", "accountant", "bid",
+    "trade", "webcam",
 })
 
-# High-trust TLDs (educational, government)
 TRUSTED_TLDS = frozenset({
-    "edu", "gov", "mil", "int",
-    "ac.uk", "gov.uk", "edu.au", "gov.au",
+    "edu", "gov", "mil", "int", "ac.uk", "gov.uk", "edu.au", "gov.au",
+})
+
+BRAND_KEYWORDS = frozenset({
+    "paypal", "apple", "google", "microsoft", "amazon", "facebook",
+    "netflix", "instagram", "whatsapp", "twitter", "linkedin", "ebay",
+    "dropbox", "icloud", "outlook", "office365", "yahoo", "chase",
+    "wellsfargo", "bankofamerica", "citibank", "capitalone", "steam",
+    "spotify", "adobe", "coinbase", "binance", "metamask",
+})
+
+PHISHING_KEYWORDS = frozenset({
+    "login", "signin", "sign-in", "logon", "password", "verify",
+    "verification", "confirm", "update", "secure", "security", "account",
+    "banking", "wallet", "suspend", "suspended", "urgent", "expire",
+    "unlock", "restore", "recover", "validate", "authenticate", "webscr",
+    "customer", "support", "helpdesk",
+})
+
+MALWARE_KEYWORDS = frozenset({
+    "download", "free", "crack", "keygen", "patch", "serial", "warez",
+    "torrent", "nulled", "hack", "cheat", "generator", "install", "setup",
+    "update", "flash", "player", "codec", "driver",
+})
+
+URL_SHORTENERS = frozenset({
+    "bit.ly", "goo.gl", "tinyurl.com", "ow.ly", "t.co", "is.gd",
+    "buff.ly", "adf.ly", "j.mp", "rb.gy", "cutt.ly", "tiny.cc",
+})
+
+DANGEROUS_EXTS = frozenset({
+    ".exe", ".dll", ".bat", ".cmd", ".msi", ".scr", ".pif", ".vbs",
+    ".js", ".jar", ".apk", ".dmg", ".zip", ".rar", ".7z", ".iso",
 })
 
 
-def calculate_entropy(text: str) -> float:
-    """
-    Calculate Shannon entropy of a string.
-    Higher entropy = more randomness (suspicious for domains).
-    Normal domains: 2.5-3.5, Random/malicious: 4.0+
-    """
+# ═══════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════
+
+def calc_entropy(text: str) -> float:
+    """Shannon entropy — higher = more random."""
     if not text:
         return 0.0
-    
-    # Count character frequencies
     freq = Counter(text.lower())
-    length = len(text)
-    
-    # Calculate entropy
-    entropy = 0.0
-    for count in freq.values():
-        if count > 0:
-            prob = count / length
-            entropy -= prob * math.log2(prob)
-    
-    return round(entropy, 4)
+    n = len(text)
+    return -sum((c / n) * math.log2(c / n) for c in freq.values() if c > 0)
 
 
-def extract_features(url: str) -> URLFeatures:
+def max_run(text: str, cond) -> int:
+    """Longest consecutive run of chars matching condition."""
+    best = cur = 0
+    for ch in text:
+        if cond(ch):
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
+
+
+# ═══════════════════════════════════════════════════════════════
+# Main Feature Extractor — identical to notebook
+# ═══════════════════════════════════════════════════════════════
+
+def extract_features(url: str) -> dict:
     """
-    Extract comprehensive features from a URL for heuristic analysis.
+    Extract 100+ features from a single URL.
+
+    CRITICAL: This function must produce features identical to the training
+    notebook. Do not modify without updating the notebook as well.
     """
+    f = {}
+    url = str(url).strip()
+
     try:
-        parsed = urlparse(url if "://" in url else f"https://{url}")
+        parsed = urlparse(url if "://" in url else f"http://{url}")
     except Exception:
-        # Return high-risk defaults for unparseable URLs
-        return URLFeatures(
-            url_length=len(url), domain_length=0, path_length=0, query_length=0,
-            domain_entropy=5.0, path_entropy=5.0, full_entropy=5.0,
-            subdomain_count=0, path_depth=0, query_param_count=0,
-            has_ip_address=False, has_port=False, has_at_symbol=True,
-            has_double_slash_redirect=True, has_hex_encoding=True,
-            digit_ratio=0.5, special_char_ratio=0.5,
-            tld="unknown", is_suspicious_tld=True,
-            heuristic_risk_score=0.8
-        )
-    
-    domain = parsed.netloc.lower()
+        return {k: 0 for k in FEATURE_NAMES}
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
     path = parsed.path
     query = parsed.query
-    
-    # Remove port from domain for analysis
-    domain_no_port = domain.split(":")[0]
-    
-    # Basic lengths
-    url_length = len(url)
-    domain_length = len(domain_no_port)
-    path_length = len(path)
-    query_length = len(query)
-    
-    # Entropy calculations
-    domain_entropy = calculate_entropy(domain_no_port.replace(".", ""))
-    path_entropy = calculate_entropy(path)
-    full_entropy = calculate_entropy(url)
-    
-    # Subdomain count
-    domain_parts = domain_no_port.split(".")
-    subdomain_count = max(0, len(domain_parts) - 2)  # Exclude root domain + TLD
-    
-    # Path depth
-    path_depth = len([p for p in path.split("/") if p])
-    
-    # Query parameters
+    fragment = parsed.fragment
+
+    # Domain cleanup
+    netloc_no_port = (
+        netloc.split(":")[0]
+        if (":" in netloc and not netloc.startswith("["))
+        else netloc
+    )
+    domain = netloc_no_port
+    parts = domain.split(".")
+    path_parts = [p for p in path.split("/") if p]
+    subdomain = ".".join(parts[:-2]) if len(parts) > 2 else ""
+    tld = parts[-1] if parts else ""
+    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "ac", "edu"):
+        tld = f"{parts[-2]}.{parts[-1]}"
+
+    url_lower = url.lower()
+    path_lower = path.lower()
+
+    # ═══ LENGTH ═══
+    f["url_length"] = len(url)
+    f["domain_length"] = len(domain)
+    f["path_length"] = len(path)
+    f["query_length"] = len(query)
+    f["fragment_length"] = len(fragment)
+    f["subdomain_length"] = len(subdomain)
+    f["tld_length"] = len(tld)
+    f["longest_domain_part"] = max((len(p) for p in parts), default=0)
+    f["avg_domain_part_len"] = np.mean([len(p) for p in parts]) if parts else 0
+    f["longest_path_part"] = max((len(p) for p in path_parts), default=0)
+    f["avg_path_part_len"] = np.mean([len(p) for p in path_parts]) if path_parts else 0
+
+    # ═══ COUNTS ═══
+    for ch, name in [
+        (".", "dot"), ("-", "hyphen"), ("_", "underscore"),
+        ("/", "slash"), ("?", "question"), ("=", "equals"),
+        ("&", "amp"), ("@", "at"), ("%", "percent"),
+        ("~", "tilde"), ("#", "hash"), (":", "colon"),
+        (";", "semicolon"),
+    ]:
+        f[f"{name}_count"] = url.count(ch)
+
+    f["domain_dot_count"] = domain.count(".")
+    f["domain_hyphen_count"] = domain.count("-")
+    f["domain_digit_count"] = sum(c.isdigit() for c in domain)
+    f["subdomain_count"] = max(0, len(parts) - 2)
+    f["path_depth"] = len(path_parts)
+    f["digit_count"] = sum(c.isdigit() for c in url)
+    f["letter_count"] = sum(c.isalpha() for c in url)
+    f["uppercase_count"] = sum(c.isupper() for c in url)
+    f["special_char_count"] = sum(not c.isalnum() for c in url)
+
     try:
-        query_params = parse_qs(query)
-        query_param_count = len(query_params)
+        qp = parse_qs(query)
+        f["query_param_count"] = len(qp)
+        f["query_value_total_len"] = sum(len(v) for vals in qp.values() for v in vals)
     except Exception:
-        query_param_count = 0
-    
-    # Suspicious indicators
-    ip_pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
-    has_ip_address = bool(re.match(ip_pattern, domain_no_port))
-    has_port = ":" in domain and not domain.startswith("[")  # Exclude IPv6
-    has_at_symbol = "@" in url
-    has_double_slash_redirect = "//" in path  # Redirect trick
-    has_hex_encoding = "%" in url and re.search(r"%[0-9a-fA-F]{2}", url) is not None
-    
-    # Ratio calculations
-    digits_in_domain = sum(c.isdigit() for c in domain_no_port)
-    digit_ratio = digits_in_domain / max(1, domain_length)
-    
-    special_chars = sum(c in "-_~" for c in domain_no_port)
-    special_char_ratio = special_chars / max(1, domain_length)
-    
-    # TLD extraction
-    if len(domain_parts) >= 2:
-        tld = domain_parts[-1]
-        # Handle compound TLDs like .co.uk
-        if len(domain_parts) >= 3 and domain_parts[-2] in ("co", "com", "org", "net", "gov", "ac"):
-            tld = f"{domain_parts[-2]}.{domain_parts[-1]}"
-    else:
-        tld = domain_parts[-1] if domain_parts else "unknown"
-    
-    is_suspicious_tld = tld in SUSPICIOUS_TLDS
-    is_trusted_tld = tld in TRUSTED_TLDS
-    
-    # Calculate heuristic risk score
-    risk_score = _calculate_heuristic_risk(
-        url_length=url_length,
-        domain_entropy=domain_entropy,
-        subdomain_count=subdomain_count,
-        has_ip_address=has_ip_address,
-        has_port=has_port,
-        has_at_symbol=has_at_symbol,
-        has_double_slash_redirect=has_double_slash_redirect,
-        digit_ratio=digit_ratio,
-        is_suspicious_tld=is_suspicious_tld,
-        is_trusted_tld=is_trusted_tld,
-        query_param_count=query_param_count,
-        path_depth=path_depth
-    )
-    
-    return URLFeatures(
-        url_length=url_length,
-        domain_length=domain_length,
-        path_length=path_length,
-        query_length=query_length,
-        domain_entropy=domain_entropy,
-        path_entropy=path_entropy,
-        full_entropy=full_entropy,
-        subdomain_count=subdomain_count,
-        path_depth=path_depth,
-        query_param_count=query_param_count,
-        has_ip_address=has_ip_address,
-        has_port=has_port,
-        has_at_symbol=has_at_symbol,
-        has_double_slash_redirect=has_double_slash_redirect,
-        has_hex_encoding=has_hex_encoding,
-        digit_ratio=digit_ratio,
-        special_char_ratio=special_char_ratio,
-        tld=tld,
-        is_suspicious_tld=is_suspicious_tld,
-        heuristic_risk_score=risk_score
+        f["query_param_count"] = 0
+        f["query_value_total_len"] = 0
+
+    # ═══ RATIOS ═══
+    ul = max(len(url), 1)
+    dl = max(len(domain), 1)
+    f["digit_ratio"] = f["digit_count"] / ul
+    f["letter_ratio"] = f["letter_count"] / ul
+    f["special_char_ratio"] = f["special_char_count"] / ul
+    f["uppercase_ratio"] = f["uppercase_count"] / max(f["letter_count"], 1)
+    f["domain_digit_ratio"] = f["domain_digit_count"] / dl
+    f["domain_hyphen_ratio"] = f["domain_hyphen_count"] / dl
+    f["path_url_ratio"] = f["path_length"] / ul
+    f["query_url_ratio"] = f["query_length"] / ul
+    f["domain_url_ratio"] = f["domain_length"] / ul
+
+    # ═══ ENTROPY ═══
+    f["url_entropy"] = calc_entropy(url)
+    f["domain_entropy"] = calc_entropy(domain.replace(".", ""))
+    f["path_entropy"] = calc_entropy(path)
+    f["query_entropy"] = calc_entropy(query)
+    f["subdomain_entropy"] = calc_entropy(subdomain)
+
+    # ═══ BOOLEAN ═══
+    f["is_https"] = int(scheme == "https")
+    f["is_http"] = int(scheme == "http")
+    f["has_www"] = int(domain.startswith("www."))
+    f["has_port"] = int(":" in netloc and not netloc.startswith("["))
+    f["has_at_symbol"] = int("@" in url)
+    f["has_double_slash_in_path"] = int("//" in path)
+    f["has_hex_encoding"] = int(bool(re.search(r"%[0-9a-fA-F]{2}", url)))
+    f["has_punycode"] = int("xn--" in domain)
+    f["has_ip_address"] = int(bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", domain)))
+    f["has_hex_ip"] = int(bool(re.match(r"^(0x[0-9a-f]+\.){3}0x[0-9a-f]+$", domain)))
+    f["has_ip_like"] = int(domain.replace(".", "").isdigit() and len(domain) > 6)
+
+    # ═══ TLD ═══
+    f["is_suspicious_tld"] = int(tld in SUSPICIOUS_TLDS)
+    f["is_trusted_tld"] = int(tld in TRUSTED_TLDS)
+    f["is_com"] = int(tld == "com")
+    f["is_org"] = int(tld == "org")
+    f["is_net"] = int(tld == "net")
+    f["is_country_tld"] = int(len(tld) == 2 and tld.isalpha())
+
+    # ═══ CHARACTER DISTRIBUTION ═══
+    f["max_consec_digits"] = max_run(url, str.isdigit)
+    f["max_consec_letters"] = max_run(url, str.isalpha)
+    f["max_consec_special"] = max_run(url, lambda c: not c.isalnum())
+    vowels = set("aeiou")
+    dom_letters = [c for c in domain if c.isalpha()]
+    f["domain_vowel_ratio"] = (
+        sum(c in vowels for c in dom_letters) / max(len(dom_letters), 1)
     )
 
+    # ═══ KEYWORDS ═══
+    f["brand_keyword_count"] = sum(1 for b in BRAND_KEYWORDS if b in url_lower)
+    f["has_brand_in_subdomain"] = int(any(b in subdomain.lower() for b in BRAND_KEYWORDS))
+    f["phishing_keyword_count"] = sum(1 for k in PHISHING_KEYWORDS if k in url_lower)
+    f["malware_keyword_count"] = sum(1 for k in MALWARE_KEYWORDS if k in url_lower)
+    f["is_url_shortener"] = int(any(s in netloc for s in URL_SHORTENERS))
+    f["has_dangerous_ext"] = int(any(path_lower.endswith(e) for e in DANGEROUS_EXTS))
+    f["has_exe"] = int(path_lower.endswith(".exe"))
+    f["has_php"] = int(".php" in path_lower)
 
-def _calculate_heuristic_risk(
-    url_length: int,
-    domain_entropy: float,
-    subdomain_count: int,
-    has_ip_address: bool,
-    has_port: bool,
-    has_at_symbol: bool,
-    has_double_slash_redirect: bool,
-    digit_ratio: float,
-    is_suspicious_tld: bool,
-    is_trusted_tld: bool,
-    query_param_count: int,
-    path_depth: int
-) -> float:
-    """
-    Calculate a heuristic risk score based on URL features.
-    Returns a value between 0.0 (safe) and 1.0 (dangerous).
-    """
-    score = 0.0
-    
-    # URL length (very long URLs are suspicious)
-    if url_length > 200:
-        score += 0.15
-    elif url_length > 100:
-        score += 0.05
-    
-    # Domain entropy (high entropy = random-looking = suspicious)
-    if domain_entropy > 4.0:
-        score += 0.20
-    elif domain_entropy > 3.5:
-        score += 0.10
-    
-    # Subdomain abuse (more than 3 subdomains is unusual)
-    if subdomain_count > 4:
-        score += 0.15
-    elif subdomain_count > 2:
-        score += 0.05
-    
-    # Direct IP access (no domain name)
-    if has_ip_address:
-        score += 0.25
-    
-    # Non-standard port
-    if has_port:
-        score += 0.10
-    
-    # @ symbol (credential injection trick)
-    if has_at_symbol:
-        score += 0.30
-    
-    # Double slash redirect trick
-    if has_double_slash_redirect:
-        score += 0.20
-    
-    # High digit ratio in domain
-    if digit_ratio > 0.3:
-        score += 0.10
-    
-    # Suspicious TLD
-    if is_suspicious_tld:
-        score += 0.15
-    
-    # Trusted TLD bonus (reduce score)
-    if is_trusted_tld:
-        score -= 0.20
-    
-    # Excessive query parameters
-    if query_param_count > 5:
-        score += 0.05
-    
-    # Very deep paths
-    if path_depth > 6:
-        score += 0.05
-    
-    # Clamp to [0, 1]
-    return max(0.0, min(1.0, score))
+    # ═══ STRUCTURAL PATTERNS ═══
+    f["has_double_letters"] = int(bool(re.search(r"(.)\1", domain)))
+    f["has_long_subdomain"] = int(len(subdomain) > 20)
+    f["has_deep_path"] = int(len(path_parts) > 5)
+    f["has_embedded_url"] = int("http" in path_lower or "www" in path_lower)
+    f["has_data_uri"] = int(url_lower.startswith("data:"))
+    f["has_javascript"] = int("javascript:" in url_lower)
+    f["has_base64"] = int(bool(re.search(r"[A-Za-z0-9+/]{20,}={0,2}", url)))
+    f["brand_in_domain"] = int(any(b in domain for b in BRAND_KEYWORDS))
+    f["brand_not_registered"] = int(
+        f["brand_in_domain"] == 1
+        and not any(
+            domain == f"{b}.com" or domain == f"www.{b}.com"
+            for b in BRAND_KEYWORDS
+        )
+    )
+
+    return f
 
 
-def get_risk_factors(features: URLFeatures) -> list[str]:
-    """
-    Generate human-readable risk factor descriptions.
-    """
+# Build canonical feature name list (same order as notebook)
+FEATURE_NAMES = list(extract_features("https://www.example.com/path?q=1").keys())
+
+
+def get_risk_factors(url: str) -> list[str]:
+    """Generate human-readable risk factor descriptions from URL features."""
+    feats = extract_features(url)
     factors = []
-    
-    if features.has_ip_address:
+
+    if feats.get("has_ip_address"):
         factors.append("Uses IP address instead of domain name")
-    if features.has_at_symbol:
+    if feats.get("has_at_symbol"):
         factors.append("Contains @ symbol (credential injection risk)")
-    if features.has_double_slash_redirect:
+    if feats.get("has_double_slash_in_path"):
         factors.append("Contains redirect pattern in path")
-    if features.domain_entropy > 4.0:
+    if feats.get("domain_entropy", 0) > 4.0:
         factors.append("Domain appears randomly generated")
-    if features.is_suspicious_tld:
-        factors.append(f"Uses suspicious TLD (.{features.tld})")
-    if features.subdomain_count > 3:
-        factors.append(f"Excessive subdomains ({features.subdomain_count})")
-    if features.url_length > 200:
+    if feats.get("is_suspicious_tld"):
+        factors.append("Uses suspicious TLD")
+    if feats.get("subdomain_count", 0) > 3:
+        factors.append(f"Excessive subdomains ({feats['subdomain_count']})")
+    if feats.get("url_length", 0) > 200:
         factors.append("Unusually long URL")
-    if features.digit_ratio > 0.3:
-        factors.append("High number of digits in domain")
-    if features.has_port:
+    if feats.get("has_port"):
         factors.append("Uses non-standard port")
-    
+    if feats.get("has_punycode"):
+        factors.append("Contains punycode (internationalized domain)")
+    if feats.get("brand_not_registered"):
+        factors.append("Brand keyword in non-official domain")
+    if feats.get("has_brand_in_subdomain"):
+        factors.append("Brand name used in subdomain")
+    if feats.get("phishing_keyword_count", 0) >= 2:
+        factors.append("Multiple phishing keywords detected")
+    if feats.get("has_dangerous_ext"):
+        factors.append("Links to potentially dangerous file type")
+    if feats.get("has_embedded_url"):
+        factors.append("URL embedded within path")
+    if feats.get("has_hex_encoding"):
+        factors.append("Contains hex-encoded characters")
+    if feats.get("is_url_shortener"):
+        factors.append("URL shortener — destination hidden")
+    if feats.get("has_data_uri"):
+        factors.append("Data URI — may contain embedded content")
+    if feats.get("has_javascript"):
+        factors.append("Contains javascript: protocol")
+
     return factors

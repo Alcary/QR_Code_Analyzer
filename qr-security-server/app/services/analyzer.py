@@ -1,481 +1,306 @@
 """
-Production-Grade URL Analyzer with Multi-Layer Verification
+URL Analyzer — Multi-Layer Orchestrator
 
-This analyzer combines multiple signals to minimize false positives
-while maintaining high detection rates for actual threats.
-
-Analysis Pipeline:
-1. Fast Path Checks (whitelist/blocklist)
-2. URL Feature Extraction (heuristics)
-3. ML Prediction with Temperature Scaling
-4. Tiered Reputation-Based Score Adjustment
-5. Network Verification (DNS + SSL)
-6. Weighted Ensemble Decision
-
-Key Improvements over v1:
-- Temperature-scaled ML probabilities (reduces overconfidence)
-- Tiered domain reputation (UGC platforms get minimal dampening)
-- Proper domain extraction using tldextract (Public Suffix List)
-- URL feature analysis (entropy, structure, suspicious patterns)
-- Confidence-aware thresholding
-- Weighted ensemble combining ML + heuristics
+Analysis pipeline:
+1. Input validation & URL normalization
+2. Cache check (TTL-based)
+3. ML Ensemble prediction (XGBoost + DistilBERT)
+4. Domain reputation lookup (4 tiers with dampening)
+5. Parallel network checks (DNS, SSL, HTTP, WHOIS)
+6. Risk score computation combining all signals
+7. Final verdict: safe / suspicious / danger
 """
 
-import aiohttp
-import asyncio
-import socket
-from urllib.parse import urlparse
-from cachetools import TTLCache
 import logging
+import time
+from urllib.parse import urlparse
+
+from cachetools import TTLCache
 
 from app.services.ml.predictor import predictor
-from app.services.url_features import extract_features, get_risk_factors
-from app.services.domain_whitelist import (
+from app.services.url_features import get_risk_factors
+from app.services.domain_reputation import (
     get_reputation,
     get_registered_domain,
     get_full_domain,
     normalize_hostname,
     ReputationTier,
 )
+from app.services.network_inspector import network_inspector
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class URLAnalyzer:
     """
-    Multi-layer URL analyzer optimized for low false positive rates.
+    Combines ML predictions, domain reputation, and network intelligence
+    into a final security verdict.
     """
-    
-    # Thresholds (tuned for calibrated probabilities)
-    # These are more conservative than v1 to reduce false positives
-    DANGER_THRESHOLD = 0.70      # Combined score must exceed this for DANGER
-    SUSPICIOUS_THRESHOLD = 0.40  # Combined score for SUSPICIOUS
-    
-    # Minimum ML confidence required to trust malicious prediction
-    MIN_CONFIDENCE_FOR_DANGER = 0.60
-    
-    # Weight factors for ensemble decision
-    ML_WEIGHT = 0.65          # ML model weight
-    HEURISTIC_WEIGHT = 0.35   # Heuristic features weight
-    
-    # Known malicious DOMAIN patterns (definite blocklist - instant danger)
-    # These are domains that are ALWAYS malicious
-    KNOWN_MALICIOUS_DOMAINS = frozenset({
-        "malware", "phish", "hack", "crack", "warez", "keygen",
-    })
-    
-    # Suspicious PATH patterns (adds risk but NOT instant danger)
-    # These could appear in legitimate URLs, so only add risk weight
-    SUSPICIOUS_PATH_PATTERNS = frozenset({
-        "download-free", "free-download", "prize-winner", "you-won",
-        "verify-account", "suspended-account", "confirm-identity",
-        "update-billing", "urgent-action", "account-locked",
-    })
-    
-    # Risk weight added for each matched path pattern
-    PATH_PATTERN_RISK_WEIGHT = 0.15
 
-    def __init__(self):
-        self.cache = TTLCache(maxsize=1000, ttl=3600)
-        
+    # Thresholds for final risk score (tuned for calibrated probabilities)
+    DANGER_THRESHOLD = 0.70
+    SUSPICIOUS_THRESHOLD = 0.40
+
+    # Weight split: ML vs network-derived signals
+    ML_WEIGHT = 0.75
+    NETWORK_WEIGHT = 0.25
+
+    def __init__(self, cache_maxsize: int = 2000, cache_ttl: int = 3600):
+        self.cache: TTLCache = TTLCache(maxsize=cache_maxsize, ttl=cache_ttl)
+
+    # ──────────────────────────────────────────────────────────
+    # Public API
+    # ──────────────────────────────────────────────────────────
+
     async def analyze(self, url: str) -> dict:
         """
-        Comprehensive async URL analysis with multi-layer verification.
+        Full URL analysis. Returns dict with:
+          status, message, risk_score, details
         """
-        # 1. Check Cache
+        start = time.perf_counter()
+
+        # ── 1. Cache ──
         if url in self.cache:
-            logger.info(f"Cache hit for {url}")
+            logger.info("Cache hit: %s", url)
             return self.cache[url]
 
-        # 2. Basic Parsing
+        # ── 2. Parse ──
         try:
-            parsed_url = urlparse(url if "://" in url else f"https://{url}")
-            domain = parsed_url.netloc.lower()
-            scheme = parsed_url.scheme.lower()
-            path = parsed_url.path.lower()
+            parsed = urlparse(url if "://" in url else f"https://{url}")
+            scheme = parsed.scheme.lower()
+            netloc = parsed.netloc.lower()
         except Exception:
-            return self._format_result("danger", "Invalid URL format")
+            return self._result("danger", "Invalid URL format", risk_score=1.0)
 
-        # 3. Protocol Check (immediate fail for non-http(s))
-        if scheme not in ['http', 'https']:
-            result = self._format_result("suspicious", "Non-standard protocol")
-            self.cache[url] = result
-            return result
+        if scheme not in ("http", "https"):
+            return self._result("suspicious", "Non-standard protocol", risk_score=0.5)
 
-        # 4. Extract URL Features (heuristics)
-        features = extract_features(url)
-        heuristic_score = features.heuristic_risk_score
-        risk_factors = get_risk_factors(features)
-        
-        logger.info(f"URL Features: entropy={features.domain_entropy:.2f}, "
-                   f"heuristic_score={heuristic_score:.2%}")
+        hostname = normalize_hostname(url)
+        registered_domain = get_registered_domain(hostname)
+        full_domain = get_full_domain(hostname)
+        path = parsed.path
 
-        # 5. Check for known malicious DOMAIN patterns (fast blocklist - only domain!)
-        # Normalize hostname to strip port, credentials, etc.
-        normalized_host = normalize_hostname(domain)
-        registered_domain = get_registered_domain(normalized_host)
-        full_domain = get_full_domain(normalized_host)
-        
-        for pattern in self.KNOWN_MALICIOUS_DOMAINS:
-            if pattern in normalized_host:
-                result = self._format_result(
-                    "danger", 
-                    f"Known malicious domain pattern: {pattern}",
-                    details={
-                        "matched_pattern": pattern,
-                        "registered_domain": registered_domain,
-                        "full_domain": full_domain,
-                        "heuristic_score": heuristic_score,
-                    }
-                )
-                self.cache[url] = result
-                return result
-        
-        # 5b. Check for suspicious PATH patterns (adds risk, not instant danger)
-        path_pattern_risk = 0.0
-        matched_path_patterns = []
-        for pattern in self.SUSPICIOUS_PATH_PATTERNS:
-            if pattern in path:
-                path_pattern_risk += self.PATH_PATTERN_RISK_WEIGHT
-                matched_path_patterns.append(pattern)
-                risk_factors.append(f"suspicious-path:{pattern}")
-        
-        # Add path pattern risk to heuristic score (capped at 0.5)
-        heuristic_score = min(1.0, heuristic_score + min(0.5, path_pattern_risk))
-
-        # 6. ML Prediction with Temperature Scaling
+        # ── 3. ML Prediction ──
         ml_result = predictor.predict(url)
-        ml_score = 0.0
-        ml_confidence = 0.0
-        ml_label = "unknown"
-        
         if ml_result:
-            ml_score = ml_result.get('malicious_score', 0.0)
-            ml_confidence = ml_result.get('confidence', 0.0)
-            ml_label = ml_result.get('pred_label', 'unknown')
-            
-            logger.info(f"ML Prediction: label={ml_label}, score={ml_score:.2%}, "
-                       f"confidence={ml_confidence:.2%}")
-        
-        # 7. Tiered Reputation-Based Score Adjustment
-        # Different platforms get different levels of trust
-        # Pass path for auth-bait detection on UGC platforms
-        reputation = get_reputation(normalized_host, url_path=path)
-        dampening_factor = reputation.dampening_factor
-        reputation_tier = reputation.tier
-        
-        original_ml_score = ml_score
-        if dampening_factor < 1.0:
-            ml_score = ml_score * dampening_factor
-            logger.info(f"Domain '{normalized_host}' [{reputation_tier.value}]: "
-                       f"dampened ML score {original_ml_score:.2%} -> {ml_score:.2%} "
-                       f"(factor: {dampening_factor})")
-        
-        # Special handling for URL shorteners - flag for redirect following
-        is_shortener = reputation_tier == ReputationTier.TIER_4_SHORTENERS
-        is_ugc_platform = reputation_tier == ReputationTier.TIER_3_UGC
+            ml_score = ml_result["ensemble_score"]
+            xgb_score = ml_result["xgb_score"]
+            bert_score = ml_result["bert_score"]
+            xgb_weight = ml_result["xgb_weight"]
+        else:
+            # Models not loaded — use 0.5 (uncertain) and rely on other layers
+            ml_score = 0.5
+            xgb_score = 0.5
+            bert_score = 0.5
+            xgb_weight = 0.5
+            logger.warning("ML models not loaded, using fallback score")
 
-        # 8. Calculate Weighted Ensemble Score
-        # Combine ML and heuristic scores with weights
-        combined_score = (
-            ml_score * self.ML_WEIGHT +
-            heuristic_score * self.HEURISTIC_WEIGHT
+        # ── 4. Domain Reputation ──
+        reputation = get_reputation(hostname, url_path=path)
+        dampened_ml = ml_score * reputation.dampening_factor
+
+        logger.info(
+            "ML=%.3f (xgb=%.3f, bert=%.3f) × dampen=%.2f → %.3f  [%s / %s]",
+            ml_score, xgb_score, bert_score,
+            reputation.dampening_factor, dampened_ml,
+            reputation.tier.value, registered_domain,
         )
-        
-        logger.info(f"Ensemble: ml={ml_score:.2%}*{self.ML_WEIGHT} + "
-                   f"heuristic={heuristic_score:.2%}*{self.HEURISTIC_WEIGHT} = "
-                   f"combined={combined_score:.2%}")
 
-        # 9. Network Verification (async)
-        try:
-            dns_task = self._check_dns(normalized_host)
-            http_task = self._check_redirects_and_ssl(url)
-            
-            results = await asyncio.gather(dns_task, http_task, return_exceptions=True)
-            
-            dns_result = results[0] if isinstance(results[0], dict) else None
-            http_result = results[1] if isinstance(results[1], dict) else None
+        # ── 5. Network Checks (parallel) ──
+        net = await network_inspector.inspect_all(url, hostname, registered_domain)
 
-        except Exception as e:
-            logger.error(f"Network check error: {e}")
-            dns_result = None
-            http_result = None
+        # ── 6. Compute Network Risk Adjustment ──
+        network_risk, network_factors = self._compute_network_risk(net, reputation.tier)
 
-        # 10. Final Decision with Confidence-Aware Logic
-        final_status, final_message = self._make_decision(
-            combined_score=combined_score,
-            ml_score=ml_score,
-            ml_confidence=ml_confidence,
-            ml_label=ml_label,
-            heuristic_score=heuristic_score,
+        # ── 7. Heuristic Risk Factors ──
+        risk_factors = get_risk_factors(url)
+        risk_factors.extend(network_factors)
+
+        # ── 8. Final Score ──
+        final_score = (dampened_ml * self.ML_WEIGHT) + (network_risk * self.NETWORK_WEIGHT)
+        final_score = max(0.0, min(1.0, final_score))
+
+        # ── 9. Hard overrides ──
+        status, message = self._decide(
+            final_score=final_score,
+            net=net,
+            reputation=reputation,
             risk_factors=risk_factors,
-            reputation_tier=reputation_tier,
-            is_shortener=is_shortener,
-            is_ugc_platform=is_ugc_platform,
-            dns_result=dns_result,
-            http_result=http_result
         )
 
-        # Build details
-        details = {
-            "registered_domain": registered_domain,
-            "full_domain": full_domain,
-            "ml_prediction": ml_label,
-            "ml_risk_score": round(ml_score, 4),
-            "ml_raw_score": round(original_ml_score, 4),  # Before dampening
-            "ml_confidence": round(ml_confidence, 4),
-            "heuristic_score": round(heuristic_score, 4),
-            "combined_score": round(combined_score, 4),
-            "reputation_tier": reputation_tier.value,
-            "dampening_factor": dampening_factor,
-            "domain_entropy": round(features.domain_entropy, 4),
-            "risk_factors": risk_factors if risk_factors else None,
-            "domain_resolved": dns_result.get("status") == "safe" if dns_result else None,
-            "is_shortener": is_shortener,
-            "is_ugc_platform": is_ugc_platform,
-        }
-        
-        if http_result:
-            details["final_url"] = http_result.get("final_url", url)
-            details["server"] = http_result.get("server", "unknown")
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
 
-        result = {
-            "status": final_status,
-            "message": final_message,
-            "details": details
-        }
-        
+        result = self._result(
+            status=status,
+            message=message,
+            risk_score=round(final_score, 4),
+            details={
+                "ml": {
+                    "ensemble_score": round(ml_score, 4),
+                    "xgb_score": round(xgb_score, 4),
+                    "bert_score": round(bert_score, 4),
+                    "xgb_weight": round(xgb_weight, 2),
+                    "dampened_score": round(dampened_ml, 4),
+                },
+                "domain": {
+                    "registered_domain": registered_domain,
+                    "full_domain": full_domain,
+                    "reputation_tier": reputation.tier.value,
+                    "dampening_factor": reputation.dampening_factor,
+                    "age_days": net.whois.age_days,
+                    "registrar": net.whois.registrar,
+                },
+                "network": {
+                    "dns_resolved": net.dns.resolved,
+                    "dns_ttl": net.dns.ttl,
+                    "dns_flags": net.dns.flags,
+                    "ssl_valid": net.ssl.valid,
+                    "ssl_issuer": net.ssl.issuer,
+                    "ssl_days_until_expiry": net.ssl.days_until_expiry,
+                    "ssl_is_new_cert": net.ssl.is_new_cert,
+                    "http_status": net.http.status_code,
+                    "redirect_count": net.http.redirect_count,
+                    "final_url": net.http.final_url,
+                    "content_flags": net.http.content_flags,
+                },
+                "risk_factors": risk_factors if risk_factors else [],
+                "analysis_time_ms": elapsed_ms,
+            },
+        )
+
         self.cache[url] = result
         return result
 
-    def _make_decision(
+    # ──────────────────────────────────────────────────────────
+    # Network Risk Scoring
+    # ──────────────────────────────────────────────────────────
+
+    def _compute_network_risk(self, net, tier: ReputationTier) -> tuple[float, list[str]]:
+        """
+        Compute a 0.0–1.0 risk score from network signals.
+        Returns (score, list_of_factor_descriptions).
+        """
+        risk = 0.0
+        factors: list[str] = []
+
+        # DNS flags
+        if "very_low_ttl" in net.dns.flags:
+            risk += 0.10
+            factors.append("Very low DNS TTL (fast-flux indicator)")
+        if "no_mx_records" in net.dns.flags:
+            risk += 0.05
+            factors.append("No MX records")
+        if "suspicious_nameserver" in net.dns.flags:
+            risk += 0.10
+            factors.append("Suspicious nameserver provider")
+
+        # SSL
+        if net.ssl.error == "ssl_verification_failed":
+            risk += 0.20
+            factors.append("SSL certificate verification failed")
+        elif net.ssl.is_new_cert:
+            risk += 0.10
+            factors.append(f"SSL certificate is very new ({net.ssl.cert_age_days}d)")
+        if not net.ssl.valid and net.ssl.error != "ssl_connection_failed":
+            risk += 0.05
+
+        # HTTP
+        if net.http.redirect_count > 3:
+            risk += 0.10
+            factors.append(f"Excessive redirects ({net.http.redirect_count})")
+        if net.http.redirect_domain_mismatch and tier != ReputationTier.SHORTENERS:
+            risk += 0.15
+            factors.append("Redirects to different domain")
+        if net.http.scheme_warning:
+            risk += 0.05
+            factors.append("No HTTPS encryption")
+        for flag in net.http.content_flags:
+            if flag == "password_field":
+                risk += 0.10
+                factors.append("Page contains password field")
+            elif flag == "billing_info_request":
+                risk += 0.15
+                factors.append("Page requests billing information")
+            elif flag == "sensitive_id_request":
+                risk += 0.15
+                factors.append("Page requests sensitive ID")
+            elif flag == "geolocation_tracking":
+                risk += 0.10
+                factors.append("Page tracks geolocation")
+            elif flag == "obfuscated_javascript":
+                risk += 0.15
+                factors.append("Obfuscated JavaScript detected")
+            elif flag == "excessive_iframes":
+                risk += 0.10
+                factors.append("Excessive iframes (click-jacking risk)")
+
+        # WHOIS
+        if net.whois.is_new_domain:
+            risk += 0.15
+            factors.append(f"Domain registered recently ({net.whois.age_days}d ago)")
+
+        return min(1.0, risk), factors
+
+    # ──────────────────────────────────────────────────────────
+    # Decision Logic
+    # ──────────────────────────────────────────────────────────
+
+    def _decide(
         self,
-        combined_score: float,
-        ml_score: float,
-        ml_confidence: float,
-        ml_label: str,
-        heuristic_score: float,
+        final_score: float,
+        net,
+        reputation,
         risk_factors: list[str],
-        reputation_tier: ReputationTier,
-        is_shortener: bool,
-        is_ugc_platform: bool,
-        dns_result: dict | None,
-        http_result: dict | None
     ) -> tuple[str, str]:
-        """
-        Make final decision based on all available signals.
-        Returns (status, message) tuple.
-        
-        Decision factors:
-        - Combined ML + heuristic score
-        - ML confidence level
-        - Reputation tier of the domain
-        - Network verification results
-        """
-        messages = []
-        
-        # DNS check is fundamental - if domain doesn't exist, it's dangerous
-        if dns_result and dns_result.get("status") == "danger":
-            return "danger", dns_result["message"]
-        
-        # HTTP connectivity issues
-        http_status = http_result.get("status") if http_result else "safe"
-        if http_status == "danger":
-            return "danger", http_result.get("message", "Site unreachable")
-        
-        # Check HTTP results for advanced threats (redirects, content, scheme)
-        if http_result:
-            redirect_count = http_result.get("redirect_count", 0)
-            suspicious_content = http_result.get("suspicious_content", [])
-            scheme_warning = http_result.get("scheme_warning", False)
-            
-            # 1. Excessive Redirects
-            if redirect_count > 3:
-                messages.append(f"Excessive redirects ({redirect_count})")
-                combined_score = max(combined_score, 0.45) # Force Suspicious level
-            
-            # 2. Suspicious Content (Personal Data / Location)
-            if suspicious_content:
-                msgs = ", ".join(suspicious_content)
-                messages.append(f"Suspicious behavior: {msgs}")
-                combined_score = max(combined_score, 0.65) # Detect as High Risk
-                
-            # 3. HTTP Scheme Warning
-            if scheme_warning:
-                 messages.append("Connection not encrypted (HTTP)")
+        """Return (status, message) based on all signals."""
 
-            # 4. Cross-Domain Redirect (on non-shortener)
-            # If a regular site redirects to a completely different domain, it's suspicious
-            # (e.g. google.com -> attacker.com)
-            if http_result.get("redirect_domain_mismatch") and not is_shortener:
-                 messages.append("Redirects to different domain")
-                 combined_score = max(combined_score, 0.55) # Treat as Suspicious
+        # Hard override: DNS failure = domain doesn't exist
+        if net.dns.error == "domain_not_found":
+            return "danger", "Domain does not exist (DNS failure)"
 
-        # URL Shortener warning - we can't fully verify without following
-        if is_shortener:
-            # Check if redirect was followed and final URL is different
-            final_url = http_result.get("final_url", "") if http_result else ""
-            if final_url and combined_score >= 0.30:
-                messages.append("Shortened URL with suspicious destination")
-                return "suspicious", " | ".join(messages)
-        
-        # Decision logic based on combined score and confidence
-        ml_label_lower = ml_label.lower()
-        
-        # DANGER: High combined score AND sufficient confidence
-        if combined_score >= self.DANGER_THRESHOLD:
-            # Additional check: Is ML confident enough?
-            if ml_confidence >= self.MIN_CONFIDENCE_FOR_DANGER:
-                if ml_label_lower == "phishing":
-                    messages.append(f"Phishing indicators detected ({combined_score:.0%} risk)")
-                elif ml_label_lower == "malware":
-                    messages.append(f"Malware indicators detected ({combined_score:.0%} risk)")
-                elif ml_label_lower == "defacement":
-                    messages.append(f"Defacement indicators detected ({combined_score:.0%} risk)")
-                else:
-                    messages.append(f"High risk detected ({combined_score:.0%})")
-                
-                # Add context about UGC platforms
-                if is_ugc_platform:
-                    messages.append("Hosted on user-content platform")
-                
-                if risk_factors:
-                    messages.append(f"Flags: {', '.join(risk_factors[:2])}")
-                
-                return "danger", " | ".join(messages)
-            else:
-                # High score but low confidence -> downgrade to suspicious
-                messages.append(f"Uncertain threat ({combined_score:.0%} risk, low confidence)")
-                return "suspicious", " | ".join(messages)
-        
-        # SUSPICIOUS: Medium combined score
-        if combined_score >= self.SUSPICIOUS_THRESHOLD:
-            messages.append(f"Suspicious patterns ({combined_score:.0%} risk)")
-            
-            # Add context about UGC platforms
-            if is_ugc_platform:
-                messages.append("User-generated content - verify authenticity")
-            
-            if risk_factors:
-                messages.append(f"Flags: {', '.join(risk_factors[:2])}")
-            
-            return "suspicious", " | ".join(messages)
-        
-        # HTTP security warning (but not blocking)
-        if http_status == "suspicious":
-            http_msg = http_result.get("message", "Connection warning")
-            # Only flag as suspicious if combined score is also elevated
-            if combined_score >= 0.20:
-                return "suspicious", http_msg
-            # Otherwise, just note it but mark as safe
-            messages.append(http_msg)
-        
-        # SAFE - provide context based on reputation tier
-        if reputation_tier == ReputationTier.TIER_1_CORPORATE:
-            messages.append("Verified safe (corporate site)")
-        elif reputation_tier == ReputationTier.TIER_2_SERVICES:
-            messages.append("Verified safe (authenticated service)")
-        elif reputation_tier == ReputationTier.TIER_3_UGC:
-            messages.append("No threats detected (user-generated content platform)")
-        elif reputation_tier == ReputationTier.TIER_4_SHORTENERS:
-            messages.append("Shortened URL - destination verified safe")
-        else:
-            messages.append("No threats detected")
-        
-        return "safe", " | ".join(messages) if messages else "URL verified safe"
+        # Hard override: server error
+        if net.http.status_code and net.http.status_code >= 500:
+            return "danger", f"Server error ({net.http.status_code})"
 
-    def _format_result(self, status: str, message: str, details: dict = None) -> dict:
-        """Format a result dictionary."""
-        result = {"status": status, "message": message}
-        if details:
-            result["details"] = details
-        return result
+        # Hard override: site unreachable
+        if net.http.error == "site_unreachable":
+            return "danger", "Site is unreachable"
 
-    def _check_heuristics(self, url: str, scheme: str, domain: str):
-        """Legacy heuristics - now handled by url_features module."""
-        if scheme not in ['http', 'https']:
-            return self._format_result("suspicious", "Non-standard protocol (not http/https)")
-        return None
+        # Score-based
+        if final_score >= self.DANGER_THRESHOLD:
+            top_factors = ", ".join(risk_factors[:3]) if risk_factors else "multiple signals"
+            return "danger", f"High risk detected ({final_score:.0%}): {top_factors}"
 
-    async def _check_dns(self, domain: str) -> dict:
-        """Verify if the domain resolves to an IP."""
-        try:
-            loop = asyncio.get_event_loop()
-            # Domain should already be normalized (no port, no path, etc.)
-            await loop.run_in_executor(None, socket.gethostbyname, domain)
-            return {"status": "safe", "message": "DNS Resolved"}
-        except socket.gaierror:
-            return {"status": "danger", "message": "Domain does not exist"}
+        if final_score >= self.SUSPICIOUS_THRESHOLD:
+            top_factors = ", ".join(risk_factors[:2]) if risk_factors else "elevated risk"
+            return "suspicious", f"Suspicious patterns ({final_score:.0%}): {top_factors}"
 
-    async def _check_redirects_and_ssl(self, url: str) -> dict:
-        """Follow redirects and check if destination is secure."""
-        try:
-            # Increased timeout slightly to allow for content reading
-            timeout = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, allow_redirects=True, ssl=False) as response:
-                    final_url = str(response.url)
-                    redirect_count = len(response.history)
-                    
-                    # Content Analysis (scan for behavioral risks)
-                    suspicious_content = []
-                    content_type = response.headers.get("Content-Type", "").lower()
-                    
-                    if response.status == 200 and "text/html" in content_type:
-                        try:
-                            # Read first 15KB of content
-                            text = await response.text()
-                            text = text[:15000].lower()
-                            
-                            # 1. Ask for Personal Data
-                            if 'type="password"' in text or "name=\"password\"" in text:
-                                suspicious_content.append("asks for password")
-                            if "credit card" in text or "billing address" in text or "cvv" in text:
-                                suspicious_content.append("asks for billing info")
-                            if "ssn" in text or "social security" in text:
-                                suspicious_content.append("asks for sensitive ID")
-                                
-                            # 2. Check Location
-                            if "geolocation.getcurrentposition" in text or "navigator.geolocation" in text:
-                                suspicious_content.append("tracks location")
-                        except Exception:
-                            # Ignore content reading errors (e.g. decoding issues)
-                            pass
-                    
-                    # Check final URL scheme
-                    scheme_warning = False
-                    if final_url.startswith("http://"):
-                        scheme_warning = True
-                    
-                    # Check for Cross-Domain Redirect
-                    # We compare the registered domains (e.g. google.com vs attacker.com)
-                    start_domain = get_registered_domain(normalize_hostname(url))
-                    end_domain = get_registered_domain(normalize_hostname(final_url))
-                    redirect_domain_mismatch = (start_domain != end_domain and redirect_count > 0)
+        # Safe — add context
+        tier = reputation.tier
+        if tier == ReputationTier.CORPORATE:
+            return "safe", "Verified safe — corporate site"
+        if tier == ReputationTier.SERVICES:
+            return "safe", "Verified safe — authenticated service"
+        if tier == ReputationTier.UGC:
+            return "safe", "No threats detected — user-generated content platform"
+        if tier == ReputationTier.SHORTENERS:
+            return "safe", "Shortened URL — destination verified safe"
 
-                    if response.status >= 400:
-                        return {
-                            "status": "danger",
-                            "message": f"Server error ({response.status})"
-                        }
+        return "safe", "No threats detected"
 
-                    return {
-                        "status": "safe",
-                        "message": "Accessible",
-                        "final_url": final_url,
-                        "server": response.headers.get("Server", "unknown"),
-                        "redirect_count": redirect_count,
-                        "suspicious_content": suspicious_content,
-                        "scheme_warning": scheme_warning,
-                        "redirect_domain_mismatch": redirect_domain_mismatch
-                    }
-        except aiohttp.ClientError:
-            return {"status": "danger", "message": "Site unreachable"}
-        except asyncio.TimeoutError:
-            return {"status": "suspicious", "message": "Connection timed out"}
+    # ──────────────────────────────────────────────────────────
+    # Helpers
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _result(status: str, message: str, risk_score: float = 0.0, details: dict | None = None) -> dict:
+        return {
+            "status": status,
+            "message": message,
+            "risk_score": risk_score,
+            "details": details,
+        }
 
 
-# Singleton instance
+# Singleton
 analyzer = URLAnalyzer()

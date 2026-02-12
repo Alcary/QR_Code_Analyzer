@@ -1,152 +1,208 @@
-import os
+"""
+ML Ensemble Predictor
+
+Loads and runs the trained ensemble:
+- XGBoost (Platt-calibrated) on 100+ URL features
+- DistilBERT (fine-tuned) on raw URL text
+- Combined via optimized ensemble weight (α)
+
+Models are expected in the `models/` directory:
+  models/
+    xgb_model.pkl                  — CalibratedClassifierCV(XGBClassifier)
+    feature_names.json             — ordered list of feature names
+    distilbert_url_classifier/     — HuggingFace model directory
+    ensemble_config.json           — {"alpha": 0.xx, ...}
+"""
+
+import json
 import logging
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from pathlib import Path
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class MLPredictor:
-    """
-    Predictor using the pre-trained BERT model from HuggingFace:
-    r3ddkahili/final-complete-malicious-url-model
-    
-    Includes Temperature Scaling for probability calibration to reduce
-    overconfident predictions that lead to false positives.
-    
-    Temperature Scaling:
-    - T < 1.0: Makes probabilities more confident (sharper)
-    - T = 1.0: No change (default softmax)
-    - T > 1.0: Makes probabilities less confident (softer)
-    
-    The model tends to be overconfident on benign URLs that share lexical
-    patterns with malicious ones (e.g., URLs with "login", "verify", etc.).
-    A temperature of 1.5-2.0 helps calibrate these predictions.
-    """
-    
-    # Temperature for probability calibration
-    # Higher = less confident = fewer false positives
-    # Empirically tuned for this model
-    TEMPERATURE = 1.8
-    
-    def __init__(self, model_name: str = "r3ddkahili/final-complete-malicious-url-model"):
-        self.model_name = model_name
-        self.tokenizer = None
-        self.model = None
-        self.temperature = self.TEMPERATURE
-        # Labels exactly as defined in the HuggingFace model card
-        self.class_names = ["Benign", "Defacement", "Phishing", "Malware"]
-        self._load_model()
+class EnsemblePredictor:
+    """Runs XGBoost + DistilBERT ensemble for binary URL classification."""
 
-    def _load_model(self):
+    def __init__(self, model_dir: str = "models"):
+        self.model_dir = Path(model_dir)
+        self.loaded = False
+        self.xgb_model = None
+        self.feature_names: list[str] = []
+        self.bert_model = None
+        self.bert_tokenizer = None
+        self.alpha = 0.5  # XGBoost weight in ensemble (1-α for BERT)
+        self.device = None
+        self._load_models()
+
+    # ── Model Loading ──────────────────────────────────────────
+
+    def _load_models(self):
+        """Load all model artifacts. Graceful if missing."""
+        xgb_ok = self._load_xgboost()
+        bert_ok = self._load_bert()
+        self._load_ensemble_config()
+
+        if xgb_ok and bert_ok:
+            self.loaded = True
+            logger.info("Ensemble loaded (XGBoost + DistilBERT, alpha=%.2f)", self.alpha)
+        elif xgb_ok:
+            self.loaded = True
+            logger.warning("Only XGBoost loaded (DistilBERT missing)")
+        elif bert_ok:
+            self.loaded = True
+            logger.warning("Only DistilBERT loaded (XGBoost missing)")
+        else:
+            logger.warning("No ML models found in %s — running without ML", self.model_dir)
+
+    def _load_xgboost(self) -> bool:
         try:
-            logger.info(f"Loading HuggingFace model: {self.model_name}...")
-            # Detect device (GPU if available)
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            logger.info(f"Using device: {self.device}")
+            import joblib
 
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            
-            # Try to get labels from config (preserve original casing)
-            # NOTE: We skip this for the r3ddkahili model because its config returns generic "LABEL_0", etc.
-            # We strictly enforce the mapping provided in the model card: {0: Benign, 1: Defacement, 2: Phishing, 3: Malware}
-            if hasattr(self.model.config, "id2label") and self.model.config.id2label:
-                 # Check if labels are generic "LABEL_0" style
-                 first_label = self.model.config.id2label[0]
-                 if str(first_label).upper().startswith("LABEL_"):
-                     logger.info("Config has generic labels. Using hardcoded class names.")
-                     self.class_names = ["Benign", "Defacement", "Phishing", "Malware"]
-                 else:
-                    # Ensure correct order based on IDs (0, 1, 2...)
-                    sorted_ids = sorted(self.model.config.id2label.keys())
-                    self.class_names = [self.model.config.id2label[i] for i in sorted_ids]
-                    logger.info(f"Loaded class names from config: {self.class_names}")
+            model_path = self.model_dir / "xgb_model.pkl"
+            names_path = self.model_dir / "feature_names.json"
+
+            if not model_path.exists():
+                logger.info("XGBoost model not found: %s", model_path)
+                return False
+
+            self.xgb_model = joblib.load(model_path)
+            logger.info("XGBoost model loaded from %s", model_path)
+
+            if names_path.exists():
+                with open(names_path) as f:
+                    self.feature_names = json.load(f)
+                logger.info("Loaded %d feature names", len(self.feature_names))
             else:
-                logger.warning("No id2label found in config, using defaults.")
+                from app.services.url_features import FEATURE_NAMES
 
-            self.model.eval() # Set to evaluation mode
-            logger.info("Model loaded successfully.")
+                self.feature_names = FEATURE_NAMES
+                logger.warning("feature_names.json not found, using module defaults")
+
+            return True
         except Exception as e:
-            logger.error(f"Failed to load HuggingFace model: {e}")
-            self.model = None
-            self.tokenizer = None
+            logger.error("Failed to load XGBoost: %s", e)
+            return False
+
+    def _load_bert(self) -> bool:
+        try:
+            import torch
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+            bert_dir = self.model_dir / "distilbert_url_classifier"
+            if not bert_dir.exists():
+                logger.info("DistilBERT not found: %s", bert_dir)
+                return False
+
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.bert_tokenizer = AutoTokenizer.from_pretrained(str(bert_dir))
+            self.bert_model = AutoModelForSequenceClassification.from_pretrained(str(bert_dir))
+            self.bert_model.to(self.device)
+            self.bert_model.eval()
+
+            logger.info("DistilBERT loaded from %s (device: %s)", bert_dir, self.device)
+            return True
+        except Exception as e:
+            logger.error("Failed to load DistilBERT: %s", e)
+            return False
+
+    def _load_ensemble_config(self) -> bool:
+        try:
+            config_path = self.model_dir / "ensemble_config.json"
+            if not config_path.exists():
+                logger.info("ensemble_config.json not found, using alpha=0.5")
+                return False
+
+            with open(config_path) as f:
+                cfg = json.load(f)
+
+            self.alpha = cfg.get("alpha", 0.5)
+            logger.info("Ensemble config: alpha=%.3f", self.alpha)
+            return True
+        except Exception as e:
+            logger.error("Failed to load ensemble config: %s", e)
+            return False
+
+    # ── Prediction ─────────────────────────────────────────────
 
     def predict(self, url: str) -> dict | None:
-        if self.model is None or self.tokenizer is None:
-            logger.error("Model not loaded, cannot predict.")
+        """
+        Run ensemble prediction.
+
+        Returns dict:
+            ensemble_score  — combined P(malicious) in [0, 1]
+            xgb_score       — XGBoost P(malicious)
+            bert_score      — DistilBERT P(malicious)
+            xgb_weight      — alpha value used
+        or None if no models loaded.
+        """
+        if not self.loaded:
             return None
 
+        xgb_score = self._predict_xgboost(url)
+        bert_score = self._predict_bert(url)
+
+        # Ensemble
+        if xgb_score is not None and bert_score is not None:
+            ensemble = self.alpha * xgb_score + (1 - self.alpha) * bert_score
+        elif xgb_score is not None:
+            ensemble = xgb_score
+        elif bert_score is not None:
+            ensemble = bert_score
+        else:
+            return None
+
+        return {
+            "ensemble_score": float(ensemble),
+            "xgb_score": float(xgb_score if xgb_score is not None else 0.5),
+            "bert_score": float(bert_score if bert_score is not None else 0.5),
+            "xgb_weight": float(self.alpha),
+        }
+
+    def _predict_xgboost(self, url: str) -> float | None:
+        """XGBoost prediction → P(malicious) in [0, 1]."""
+        if self.xgb_model is None:
+            return None
         try:
-            # Tokenize
-            inputs = self.tokenizer(
-                url, 
-                return_tensors="pt", 
-                truncation=True, 
-                padding=True, 
-                max_length=128
+            from app.services.url_features import extract_features
+
+            feats = extract_features(url)
+            ordered = [feats.get(name, 0) for name in self.feature_names]
+            X = np.array([ordered], dtype=np.float32)
+
+            proba = self.xgb_model.predict_proba(X)[0]
+            return float(proba[1]) if len(proba) > 1 else float(proba[0])
+        except Exception as e:
+            logger.error("XGBoost prediction error: %s", e)
+            return None
+
+    def _predict_bert(self, url: str) -> float | None:
+        """DistilBERT prediction → P(malicious) in [0, 1]."""
+        if self.bert_model is None or self.bert_tokenizer is None:
+            return None
+        try:
+            import torch
+
+            inputs = self.bert_tokenizer(
+                url,
+                return_tensors="pt",
+                truncation=True,
+                padding=True,
+                max_length=128,
             )
-            
-            # Move inputs to device
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            # Inference with Temperature Scaling
             with torch.no_grad():
-                outputs = self.model(**inputs)
-                logits = outputs.logits
-                
-                # Apply temperature scaling for calibration
-                # This reduces overconfidence in predictions
-                scaled_logits = logits / self.temperature
-                probs = F.softmax(scaled_logits, dim=1)[0]
-                
-                # Also get raw (uncalibrated) probabilities for comparison
-                raw_probs = F.softmax(logits, dim=1)[0]
+                logits = self.bert_model(**inputs).logits
+                probs = torch.softmax(logits, dim=1)[0]
 
-            # Get predicted class (from calibrated probabilities)
-            pred_idx = int(torch.argmax(probs).item())
-            confidence = float(probs[pred_idx].item())
-            raw_confidence = float(raw_probs[pred_idx].item())
-            
-            # Map index to label
-            if pred_idx < len(self.class_names):
-                pred_label = self.class_names[pred_idx]
-            else:
-                pred_label = "unknown"
-
-            # Calculate "Malicious Score" (Probability of NOT being benign)
-            # Use case-insensitive search for "Benign" label
-            malicious_score = 0.0
-            benign_idx = next((i for i, name in enumerate(self.class_names) if name.lower() == "benign"), None)
-            if benign_idx is not None:
-                malicious_score = float(1.0 - probs[benign_idx].item())
-            else:
-                # Fallback: assume index 0 is benign
-                malicious_score = float(1.0 - probs[0].item())
-
-            is_malicious = bool(pred_label.lower() != "benign")
-
-            # Construct probabilities dict
-            probs_dict = {
-                name: float(probs[i].item()) 
-                for i, name in enumerate(self.class_names) 
-                if i < len(probs)
-            }
-
-            return {
-                "pred_label": pred_label,
-                "confidence": confidence,
-                "malicious_score": malicious_score,
-                "is_malicious": is_malicious,
-                "probs": probs_dict,
-                "model_used": self.model_name
-            }
-
+            return float(probs[1].item()) if len(probs) > 1 else float(probs[0].item())
         except Exception as e:
-            logger.error(f"Prediction error: {e}")
+            logger.error("DistilBERT prediction error: %s", e)
             return None
 
-# Singleton instance
-predictor = MLPredictor()
+
+# Singleton
+predictor = EnsemblePredictor()

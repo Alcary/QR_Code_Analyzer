@@ -1,17 +1,44 @@
+import logging
+
 from fastapi import APIRouter
-from app.models.schemas import ScanRequest, ScanResult
+
+from app.models.schemas import (
+    ScanRequest,
+    ScanResult,
+    ScanDetails,
+    MLDetails,
+    DomainDetails,
+    NetworkDetails,
+)
 from app.services.analyzer import analyzer
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
 
 @router.post("/scan", response_model=ScanResult)
 async def scan_url(request: ScanRequest):
     """
-    Scans a given URL for security threats.
+    Multi-layer URL security analysis.
+
+    Pipeline: ML ensemble → domain reputation → DNS/SSL/HTTP/WHOIS → verdict.
     """
     result = await analyzer.analyze(request.url)
+
+    details = None
+    raw = result.get("details")
+    if raw:
+        details = ScanDetails(
+            ml=MLDetails(**raw["ml"]) if raw.get("ml") else None,
+            domain=DomainDetails(**raw["domain"]) if raw.get("domain") else None,
+            network=NetworkDetails(**raw["network"]) if raw.get("network") else None,
+            risk_factors=raw.get("risk_factors", []),
+            analysis_time_ms=raw.get("analysis_time_ms"),
+        )
+
     return ScanResult(
         status=result["status"],
         message=result["message"],
-        details=result.get("details", {"original_url": request.url})
+        risk_score=result.get("risk_score", 0.0),
+        details=details,
     )
