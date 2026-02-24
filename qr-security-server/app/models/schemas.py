@@ -1,16 +1,54 @@
-from pydantic import BaseModel, Field
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.config import settings
 
 
 class ScanRequest(BaseModel):
-    url: str
+    url: str = Field(..., min_length=1, max_length=2048, description="URL to analyze")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) > settings.MAX_URL_LENGTH:
+            raise ValueError(f"URL exceeds maximum length of {settings.MAX_URL_LENGTH}")
+
+        # Add scheme if missing (assume https)
+        if not any(v.lower().startswith(f"{s}://") for s in settings.ALLOWED_SCHEMES):
+            if "://" in v:
+                scheme = v.split("://")[0].lower()
+                raise ValueError(
+                    f"Unsupported scheme '{scheme}'. Allowed: {settings.ALLOWED_SCHEMES}"
+                )
+            v = f"https://{v}"
+
+        try:
+            parsed = urlparse(v)
+            if not parsed.netloc:
+                raise ValueError("Invalid URL: no hostname found")
+        except Exception as e:
+            raise ValueError(f"Invalid URL format: {e}")
+
+        return v
+
+
+class FeatureContribution(BaseModel):
+    """Single SHAP feature-attribution entry."""
+    feature: str = Field(description="Feature name")
+    shap_value: float = Field(description="SHAP value (positive=risk, negative=safe)")
+    feature_value: float = Field(description="Raw feature value for this URL")
+    direction: str = Field(description="'risk' or 'safe'")
 
 
 class MLDetails(BaseModel):
-    ensemble_score: float = Field(description="Combined ML probability (0=safe, 1=malicious)")
-    xgb_score: float = Field(description="XGBoost probability")
-    bert_score: float = Field(description="DistilBERT probability")
-    xgb_weight: float = Field(description="XGBoost weight in ensemble")
-    dampened_score: float = Field(description="ML score after reputation dampening")
+    ml_score: float = Field(description="ML probability of malicious (0=safe, 1=malicious)")
+    xgb_score: float = Field(description="XGBoost probability (same as ml_score)")
+    dampened_score: float = Field(description="ML score after domain-trust dampening")
+    explanation: list[FeatureContribution] | None = Field(
+        None, description="SHAP feature-attribution explanations (top contributors)"
+    )
 
 
 class DomainDetails(BaseModel):
@@ -18,6 +56,7 @@ class DomainDetails(BaseModel):
     full_domain: str
     reputation_tier: str
     dampening_factor: float
+    trust_description: str | None = None
     age_days: int | None = None
     registrar: str | None = None
 
@@ -45,7 +84,7 @@ class ScanDetails(BaseModel):
 
 
 class ScanResult(BaseModel):
-    status: str  # 'safe', 'danger', 'suspicious'
+    status: str
     message: str
     risk_score: float = Field(0.0, description="Overall risk score 0.0-1.0")
     details: ScanDetails | None = None

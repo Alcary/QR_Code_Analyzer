@@ -1,0 +1,279 @@
+"""
+Homograph & Typosquatting Detection
+
+Detects:
+1. IDN Homograph attacks — Cyrillic а (U+0430) vs Latin a (U+0061), etc.
+2. Typosquatting — Levenshtein distance to known brand domains
+3. Character substitution — g00gle, paypa1, amaz0n
+
+These features are high-signal for phishing detection and are used
+by both the heuristic risk factor generator and the ML feature extractor.
+"""
+
+import re
+import unicodedata
+from functools import lru_cache
+
+import tldextract
+
+
+# ═══════════════════════════════════════════════════════════════
+# Confusable Unicode Mappings (most common attack vectors)
+# ═══════════════════════════════════════════════════════════════
+
+# Maps visually similar Unicode characters to their ASCII counterpart
+CONFUSABLES: dict[str, str] = {
+    # Cyrillic → Latin
+    "\u0430": "a",  # а
+    "\u0435": "e",  # е
+    "\u043e": "o",  # о
+    "\u0440": "p",  # р
+    "\u0441": "c",  # с
+    "\u0443": "y",  # у
+    "\u0445": "x",  # х
+    "\u044a": "b",  # ъ (visually similar in some fonts)
+    "\u0456": "i",  # і (Ukrainian)
+    "\u0458": "j",  # ј (Serbian)
+    "\u04bb": "h",  # һ
+    "\u0501": "d",  # ԁ
+    # Greek → Latin
+    "\u03b1": "a",  # α
+    "\u03b5": "e",  # ε
+    "\u03bf": "o",  # ο
+    "\u03c1": "p",  # ρ
+    "\u03ba": "k",  # κ
+    "\u03bd": "v",  # ν
+    "\u03c4": "t",  # τ
+    "\u03b9": "i",  # ι
+    # Common number/letter substitutions used by attackers
+    "0": "o",
+    "1": "l",
+    "!": "i",
+    "$": "s",
+    "@": "a",
+    "3": "e",
+    "5": "s",
+    "7": "t",
+    "8": "b",
+}
+
+# Reverse mapping for detection: ASCII → set of confusable chars
+_REVERSE_CONFUSABLES: dict[str, set[str]] = {}
+for _conf, _ascii in CONFUSABLES.items():
+    _REVERSE_CONFUSABLES.setdefault(_ascii, set()).add(_conf)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Brand Targets (domains attackers most commonly impersonate)
+# ═══════════════════════════════════════════════════════════════
+
+BRAND_DOMAINS: dict[str, str] = {
+    # brand_key: official domain (no www)
+    "paypal": "paypal.com",
+    "apple": "apple.com",
+    "google": "google.com",
+    "microsoft": "microsoft.com",
+    "amazon": "amazon.com",
+    "facebook": "facebook.com",
+    "netflix": "netflix.com",
+    "instagram": "instagram.com",
+    "whatsapp": "whatsapp.com",
+    "twitter": "twitter.com",
+    "linkedin": "linkedin.com",
+    "ebay": "ebay.com",
+    "dropbox": "dropbox.com",
+    "icloud": "icloud.com",
+    "outlook": "outlook.com",
+    "yahoo": "yahoo.com",
+    "chase": "chase.com",
+    "wellsfargo": "wellsfargo.com",
+    "bankofamerica": "bankofamerica.com",
+    "citibank": "citibank.com",
+    "capitalone": "capitalone.com",
+    "steam": "steampowered.com",
+    "spotify": "spotify.com",
+    "adobe": "adobe.com",
+    "coinbase": "coinbase.com",
+    "binance": "binance.com",
+    "metamask": "metamask.io",
+    "github": "github.com",
+    "zoom": "zoom.us",
+    "slack": "slack.com",
+}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Core Functions
+# ═══════════════════════════════════════════════════════════════
+
+def normalize_confusables(text: str) -> str:
+    """
+    Replace visually confusable characters with their ASCII equivalents.
+
+    'pаypal' (with Cyrillic а) → 'paypal'
+    'g00gle' → 'google'
+    'paypa1' → 'paypal'
+    """
+    result = []
+    for ch in text.lower():
+        result.append(CONFUSABLES.get(ch, ch))
+    return "".join(result)
+
+
+def has_mixed_scripts(text: str) -> bool:
+    """
+    Check if a string mixes Latin with Cyrillic/Greek scripts.
+    This is a strong indicator of an IDN homograph attack.
+    Pure ASCII or pure Cyrillic domains are fine; mixing is not.
+    """
+    scripts = set()
+    for ch in text:
+        if ch in ".-_0123456789":
+            continue
+        cat = unicodedata.category(ch)
+        if cat.startswith("L"):  # Letter
+            name = unicodedata.name(ch, "").upper()
+            if "CYRILLIC" in name:
+                scripts.add("cyrillic")
+            elif "GREEK" in name:
+                scripts.add("greek")
+            elif "LATIN" in name or ch.isascii():
+                scripts.add("latin")
+            else:
+                scripts.add("other")
+    return len(scripts) > 1
+
+
+def count_confusable_chars(domain: str) -> int:
+    """Count number of non-ASCII characters that are visually confusable with ASCII."""
+    count = 0
+    for ch in domain.lower():
+        if ch in CONFUSABLES and not ch.isascii():
+            count += 1
+    return count
+
+
+@lru_cache(maxsize=4096)
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Compute Levenshtein (edit) distance between two strings."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+
+    prev_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            cost = 0 if c1 == c2 else 1
+            curr_row.append(min(
+                curr_row[j] + 1,           # insert
+                prev_row[j + 1] + 1,       # delete
+                prev_row[j] + cost,        # replace
+            ))
+        prev_row = curr_row
+
+    return prev_row[-1]
+
+
+def min_brand_distance(domain: str) -> tuple[int, str]:
+    """
+    Compute the minimum Levenshtein distance from a domain to any known brand.
+
+    Returns (min_distance, closest_brand_key).
+
+    We compare against both:
+    - The brand keyword ('paypal')
+    - The full official domain ('paypal.com')
+    And also compare after normalizing confusable characters.
+    """
+    # Strip common prefixes
+    clean = domain.lower().lstrip("www.")
+    normalized = normalize_confusables(clean)
+
+    # Use tldextract for accurate domain name extraction
+    # (handles multi-part TLDs like .co.uk correctly)
+    ext = tldextract.extract(clean)
+    domain_name = ext.domain or clean
+    norm_domain_name = normalize_confusables(domain_name)
+
+    best_dist = 999
+    best_brand = ""
+
+    for brand_key, brand_domain in BRAND_DOMAINS.items():
+        d1 = levenshtein_distance(domain_name, brand_key)
+        d2 = levenshtein_distance(norm_domain_name, brand_key)
+        d3 = levenshtein_distance(clean, brand_domain)
+        d4 = levenshtein_distance(normalized, brand_domain)
+
+        dist = min(d1, d2, d3, d4)
+        if dist < best_dist:
+            best_dist = dist
+            best_brand = brand_key
+
+    return best_dist, best_brand
+
+
+def detect_char_substitution(domain: str) -> bool:
+    """
+    Detect leet-speak / character substitution in domain.
+    E.g., g00gle, paypa1, amaz0n, micr0soft
+    """
+    # Strip TLD and www using tldextract
+    ext = tldextract.extract(domain.lower())
+    name = ext.domain or domain.lower()
+
+    # Check if normalizing confusables changes the string AND matches a brand
+    normalized = normalize_confusables(name)
+    if normalized != name:
+        for brand_key in BRAND_DOMAINS:
+            if brand_key in normalized and brand_key not in name:
+                return True
+
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════
+# Feature Extraction (for ML model)
+# ═══════════════════════════════════════════════════════════════
+
+def extract_homograph_features(domain: str) -> dict:
+    """
+    Extract homograph/typosquatting features for the ML model.
+
+    Returns dict with feature names and values:
+    - homograph_has_mixed_scripts:  1 if domain mixes Latin + Cyrillic/Greek
+    - homograph_confusable_chars:   count of confusable Unicode chars
+    - homograph_min_brand_distance: Levenshtein distance to closest brand
+    - homograph_has_char_sub:       1 if leet-speak substitution detected
+    - homograph_is_exact_brand:     1 if domain matches brand after normalization
+    """
+    min_dist, closest = min_brand_distance(domain)
+
+    # Check if after normalization, domain contains exact brand match
+    normalized = normalize_confusables(domain.lower())
+    clean_domain = domain.lower().rstrip(".")
+
+    # Exempt legitimate subdomains of official brand domains
+    # e.g., app.slack.com is a subdomain of slack.com → not impersonation
+    is_official_domain = any(
+        clean_domain == d
+        or clean_domain == f"www.{d}"
+        or clean_domain.endswith(f".{d}")
+        for d in BRAND_DOMAINS.values()
+    )
+
+    # Only flag impersonation if the domain contains a brand name
+    # AND is NOT an official (sub)domain of that brand
+    is_exact_match = (
+        any(b in normalized for b in BRAND_DOMAINS)
+        and not is_official_domain
+    )
+
+    return {
+        "homograph_has_mixed_scripts": int(has_mixed_scripts(domain)),
+        "homograph_confusable_chars": count_confusable_chars(domain),
+        "homograph_min_brand_distance": min_dist,
+        "homograph_has_char_sub": int(detect_char_substitution(domain)),
+        "homograph_is_exact_brand": int(is_exact_match and min_dist <= 2),
+    }

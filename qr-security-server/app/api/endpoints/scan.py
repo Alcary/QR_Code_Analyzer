@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.models.schemas import (
     ScanRequest,
@@ -10,13 +10,14 @@ from app.models.schemas import (
     DomainDetails,
     NetworkDetails,
 )
+from app.core.security import verify_api_key
 from app.services.analyzer import analyzer
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/scan", response_model=ScanResult)
+@router.post("/scan", response_model=ScanResult, dependencies=[Depends(verify_api_key)])
 async def scan_url(request: ScanRequest):
     """
     Multi-layer URL security analysis.
