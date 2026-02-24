@@ -1,20 +1,25 @@
 """
 URL Feature Extraction for ML Model
 
-IMPORTANT: This module MUST produce features identical to the training notebook
-(Model_Training_Colab.ipynb). Any changes here must also be reflected there.
+IMPORTANT: This module MUST produce features identical to the training notebook.
 The feature names and their order are verified against feature_names.json at startup.
+
 """
 
+import ipaddress
 import re
 import math
 import numpy as np
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 from collections import Counter
+
+import tldextract
+
+from app.services.homograph_detector import extract_homograph_features
 
 
 # ═══════════════════════════════════════════════════════════════
-# Keyword / Pattern Dictionaries — MUST match notebook exactly
+# Keyword / Pattern Dictionaries
 # ═══════════════════════════════════════════════════════════════
 
 SUSPICIOUS_TLDS = frozenset({
@@ -63,6 +68,33 @@ DANGEROUS_EXTS = frozenset({
     ".js", ".jar", ".apk", ".dmg", ".zip", ".rar", ".7z", ".iso",
 })
 
+# Common bigrams for domain randomness scoring.
+# Includes standard English prose bigrams PLUS patterns common in
+# legitimate domain names (e.g. "go", "oo", "ok", "bo", "ap", "eb").
+_COMMON_BIGRAMS = frozenset({
+    # Core English prose bigrams
+    "th", "he", "in", "er", "an", "re", "on", "at", "en", "nd",
+    "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar",
+    "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le",
+    "ve", "co", "me", "de", "hi", "ri", "ro", "ic", "ne", "ea",
+    "ra", "ce", "li", "ch", "ll", "be", "ma", "si", "om", "ur",
+    # Domain-typical bigrams (cover common brand names & tech words)
+    "go", "oo", "og", "gl", "ok", "bo", "fa", "ac", "eb",
+    "am", "az", "ap", "pl", "pp", "tw", "et", "fl", "ix",
+    "pa", "sc", "ca", "op", "ub", "dr", "sp", "ot", "if",
+    "so", "ft", "ab", "ad", "ob", "do", "ag", "gi", "ig",
+    "po", "pi", "cr", "ct", "di", "mi", "mo", "no", "ov",
+    "sh", "sk", "sl", "sn", "sw", "ta", "tr", "tu", "up",
+    "ut", "wa", "wi", "wo", "zo",
+})
+
+# Suspicious keywords in domain names — direct indicator of bad intent
+SUSPICIOUS_DOMAIN_KEYWORDS = frozenset({
+    "scam", "phish", "phishing", "fraud", "hack", "hacking",
+    "malware", "virus", "trojan", "ransomware", "spyware",
+    "exploit", "botnet", "keylogger", "stealer", "spam",
+})
+
 
 # ═══════════════════════════════════════════════════════════════
 # Helper Functions
@@ -89,13 +121,29 @@ def max_run(text: str, cond) -> int:
     return best
 
 
+def bigram_score(text: str) -> float:
+    """
+    Fraction of character bigrams that appear in common English bigrams.
+    Real words have high scores (0.4-0.8), random strings have low (<0.2).
+    """
+    text = text.lower()
+    letters = "".join(c for c in text if c.isalpha())
+    if len(letters) < 2:
+        return 0.0
+    bigrams = [letters[i:i+2] for i in range(len(letters) - 1)]
+    if not bigrams:
+        return 0.0
+    common_count = sum(1 for b in bigrams if b in _COMMON_BIGRAMS)
+    return common_count / len(bigrams)
+
+
 # ═══════════════════════════════════════════════════════════════
-# Main Feature Extractor — identical to notebook
+# Main Feature Extractor
 # ═══════════════════════════════════════════════════════════════
 
 def extract_features(url: str) -> dict:
     """
-    Extract 100+ features from a single URL.
+    Extract 95 features from a single URL.
 
     CRITICAL: This function must produce features identical to the training
     notebook. Do not modify without updating the notebook as well.
@@ -109,24 +157,26 @@ def extract_features(url: str) -> dict:
         return {k: 0 for k in FEATURE_NAMES}
 
     scheme = parsed.scheme.lower()
-    netloc = parsed.netloc.lower()
     path = parsed.path
     query = parsed.query
     fragment = parsed.fragment
 
-    # Domain cleanup
-    netloc_no_port = (
-        netloc.split(":")[0]
-        if (":" in netloc and not netloc.startswith("["))
-        else netloc
-    )
-    domain = netloc_no_port
+    # Domain extraction — use parsed.hostname which correctly handles
+    # userinfo (http://user:pass@host), ports, and IPv6 brackets.
+    domain = (parsed.hostname or "").lower()
+    try:
+        has_port = parsed.port is not None
+    except ValueError:
+        # Malformed port (non-numeric) — treat as no valid port
+        has_port = False
     parts = domain.split(".")
     path_parts = [p for p in path.split("/") if p]
-    subdomain = ".".join(parts[:-2]) if len(parts) > 2 else ""
-    tld = parts[-1] if parts else ""
-    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "ac", "edu"):
-        tld = f"{parts[-2]}.{parts[-1]}"
+
+    # Use tldextract for accurate subdomain / registered-domain / TLD
+    # parsing (handles multi-part TLDs like .co.uk, .com.au correctly)
+    ext = tldextract.extract(domain)
+    subdomain = ext.subdomain
+    tld = ext.suffix or (parts[-1] if parts else "")
 
     url_lower = url.lower()
     path_lower = path.lower()
@@ -140,9 +190,9 @@ def extract_features(url: str) -> dict:
     f["subdomain_length"] = len(subdomain)
     f["tld_length"] = len(tld)
     f["longest_domain_part"] = max((len(p) for p in parts), default=0)
-    f["avg_domain_part_len"] = np.mean([len(p) for p in parts]) if parts else 0
+    f["avg_domain_part_len"] = float(np.mean([len(p) for p in parts])) if parts else 0.0
     f["longest_path_part"] = max((len(p) for p in path_parts), default=0)
-    f["avg_path_part_len"] = np.mean([len(p) for p in path_parts]) if path_parts else 0
+    f["avg_path_part_len"] = float(np.mean([len(p) for p in path_parts])) if path_parts else 0.0
 
     # ═══ COUNTS ═══
     for ch, name in [
@@ -157,7 +207,7 @@ def extract_features(url: str) -> dict:
     f["domain_dot_count"] = domain.count(".")
     f["domain_hyphen_count"] = domain.count("-")
     f["domain_digit_count"] = sum(c.isdigit() for c in domain)
-    f["subdomain_count"] = max(0, len(parts) - 2)
+    f["subdomain_count"] = subdomain.count(".") + 1 if subdomain else 0
     f["path_depth"] = len(path_parts)
     f["digit_count"] = sum(c.isdigit() for c in url)
     f["letter_count"] = sum(c.isalpha() for c in url)
@@ -196,12 +246,16 @@ def extract_features(url: str) -> dict:
     f["is_https"] = int(scheme == "https")
     f["is_http"] = int(scheme == "http")
     f["has_www"] = int(domain.startswith("www."))
-    f["has_port"] = int(":" in netloc and not netloc.startswith("["))
+    f["has_port"] = int(has_port)
     f["has_at_symbol"] = int("@" in url)
     f["has_double_slash_in_path"] = int("//" in path)
-    f["has_hex_encoding"] = int(bool(re.search(r"%[0-9a-fA-F]{2}", url)))
+    f["has_hex_encoding"] = int(unquote(url) != url)
     f["has_punycode"] = int("xn--" in domain)
-    f["has_ip_address"] = int(bool(re.match(r"^(\d{1,3}\.){3}\d{1,3}$", domain)))
+    try:
+        ipaddress.IPv4Address(domain)
+        f["has_ip_address"] = 1
+    except ValueError:
+        f["has_ip_address"] = 0
     f["has_hex_ip"] = int(bool(re.match(r"^(0x[0-9a-f]+\.){3}0x[0-9a-f]+$", domain)))
     f["has_ip_like"] = int(domain.replace(".", "").isdigit() and len(domain) > 6)
 
@@ -228,7 +282,7 @@ def extract_features(url: str) -> dict:
     f["has_brand_in_subdomain"] = int(any(b in subdomain.lower() for b in BRAND_KEYWORDS))
     f["phishing_keyword_count"] = sum(1 for k in PHISHING_KEYWORDS if k in url_lower)
     f["malware_keyword_count"] = sum(1 for k in MALWARE_KEYWORDS if k in url_lower)
-    f["is_url_shortener"] = int(any(s in netloc for s in URL_SHORTENERS))
+    f["is_url_shortener"] = int(ext.registered_domain in URL_SHORTENERS)
     f["has_dangerous_ext"] = int(any(path_lower.endswith(e) for e in DANGEROUS_EXTS))
     f["has_exe"] = int(path_lower.endswith(".exe"))
     f["has_php"] = int(".php" in path_lower)
@@ -249,6 +303,20 @@ def extract_features(url: str) -> dict:
             for b in BRAND_KEYWORDS
         )
     )
+
+    # ═══ HOMOGRAPH / TYPOSQUATTING ═══
+    homo = extract_homograph_features(domain)
+    f["homograph_has_mixed_scripts"] = homo["homograph_has_mixed_scripts"]
+    f["homograph_confusable_chars"] = homo["homograph_confusable_chars"]
+    f["homograph_min_brand_distance"] = homo["homograph_min_brand_distance"]
+    f["homograph_has_char_sub"] = homo["homograph_has_char_sub"]
+    f["homograph_is_exact_brand"] = homo["homograph_is_exact_brand"]
+
+    # ═══ N-GRAM FEATURES (domain randomness) ═══
+    domain_name_only = ext.domain or domain
+    f["domain_bigram_score"] = bigram_score(domain_name_only)
+    f["subdomain_bigram_score"] = bigram_score(subdomain) if subdomain else 0.0
+    f["path_bigram_score"] = bigram_score("".join(path_parts)) if path_parts else 0.0
 
     return f
 
@@ -298,5 +366,27 @@ def get_risk_factors(url: str) -> list[str]:
         factors.append("Data URI — may contain embedded content")
     if feats.get("has_javascript"):
         factors.append("Contains javascript: protocol")
+
+    # ═══ Homograph-specific risk factors ═══
+    if feats.get("homograph_has_mixed_scripts"):
+        factors.append("Domain mixes scripts (IDN homograph attack indicator)")
+    if feats.get("homograph_confusable_chars", 0) > 0:
+        factors.append("Domain contains visually confusable characters")
+    if feats.get("homograph_has_char_sub"):
+        factors.append("Character substitution detected (e.g., g00gle, paypa1)")
+    if feats.get("homograph_is_exact_brand"):
+        factors.append("Domain impersonates a known brand")
+    if feats.get("homograph_min_brand_distance", 999) <= 2 and feats.get("brand_not_registered"):
+        factors.append("Domain is suspiciously similar to a known brand")
+    if feats.get("domain_bigram_score", 1.0) < 0.10:
+        factors.append("Domain name appears randomly generated")
+
+    # ═══ Suspicious domain keyword detection ═══
+    risk_ext = tldextract.extract(url)
+    domain_word = risk_ext.domain or ""
+    for kw in SUSPICIOUS_DOMAIN_KEYWORDS:
+        if kw in domain_word:
+            factors.append(f"Suspicious keyword in domain name: '{kw}'")
+            break
 
     return factors

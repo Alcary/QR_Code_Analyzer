@@ -5,17 +5,36 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "QR Security Scanner API"
     API_V1_STR: str = "/api/v1"
 
-    # CORS
+    # ── Environment ───────────────────────────────────────────
+    # "dev"        — relaxed defaults (no API key required, CORS *).
+    # "production" — API_KEY must be set, CORS wildcard is rejected.
+    ENVIRONMENT: str = "dev"
+
+    # ── Authentication ────────────────────────────────────────
+    # Set via API_KEY env var or .env file. Leave empty to disable (dev mode).
+    API_KEY: str = ""
+
+    # ── CORS ──────────────────────────────────────────────────
+    # In production, restrict to your mobile app's origin.
+    # Example: ["https://yourapp.com"] or ["*"] for dev.
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
 
-    # Model directory (relative to server root)
+    # ── Rate Limiting ─────────────────────────────────────────
+    # Requests per minute per IP address.
+    RATE_LIMIT_PER_MINUTE: int = 30
+
+    # ── Input Validation ──────────────────────────────────────
+    MAX_URL_LENGTH: int = 2048
+    ALLOWED_SCHEMES: list[str] = ["http", "https"]
+
+    # ── Model directory (relative to server root) ─────────────
     MODEL_DIR: str = "models"
 
-    # Analysis timeouts (seconds)
+    # ── Analysis timeouts (seconds) ───────────────────────────
     NETWORK_TIMEOUT: float = 8.0
     WHOIS_TIMEOUT: float = 5.0
 
-    # Cache
+    # ── Cache ─────────────────────────────────────────────────
     CACHE_MAX_SIZE: int = 2000
     CACHE_TTL: int = 3600  # 1 hour
 

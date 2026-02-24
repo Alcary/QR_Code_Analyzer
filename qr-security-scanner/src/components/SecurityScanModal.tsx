@@ -1,9 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator, Linking } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { scannerColors as colors } from '../constants/theme';
-import { scanURL } from '../services/apiService';
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  Modal,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Linking,
+  Platform,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { scannerColors as colors } from "../constants/theme";
+import { SCREEN_HEIGHT } from "../constants/layout";
+import {
+  scanURL,
+  type ScanResult,
+  type ScanDetails,
+} from "../services/apiService";
+import ScanResultView from "./ScanResultView";
 
 interface SecurityScanModalProps {
   visible: boolean;
@@ -11,9 +26,17 @@ interface SecurityScanModalProps {
   onClose: () => void;
 }
 
-export default function SecurityScanModal({ visible, url, onClose }: SecurityScanModalProps) {
-  const [status, setStatus] = useState<'analyzing' | 'safe' | 'danger' | 'suspicious'>('analyzing');
-  const [message, setMessage] = useState<string>('');
+export default function SecurityScanModal({
+  visible,
+  url,
+  onClose,
+}: SecurityScanModalProps) {
+  const [status, setStatus] = useState<
+    "analyzing" | "safe" | "danger" | "suspicious"
+  >("analyzing");
+  const [message, setMessage] = useState<string>("");
+  const [riskScore, setRiskScore] = useState<number>(0);
+  const [details, setDetails] = useState<ScanDetails | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -21,33 +44,39 @@ export default function SecurityScanModal({ visible, url, onClose }: SecuritySca
     const performScan = async () => {
       if (!visible || !url) return;
 
-      setStatus('analyzing');
-      setMessage('Performing security analysis...');
-      
+      setStatus("analyzing");
+      setMessage("Performing security analysis...");
+      setRiskScore(0);
+      setDetails(null);
+
       try {
-        const result = await scanURL(url);
-        
+        const result: ScanResult = await scanURL(url);
+
         if (!isMounted) return;
 
         setStatus(result.status);
         setMessage(result.message);
+        setRiskScore(result.risk_score ?? 0);
+        setDetails(result.details ?? null);
 
-        if (result.status === 'safe') {
+        if (result.status === "safe") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } else {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
       } catch (error) {
         if (!isMounted) return;
-        setStatus('suspicious');
-        setMessage('Analysis failed. Be careful.');
+        setStatus("suspicious");
+        setMessage("Analysis failed. Be careful.");
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
     };
 
     performScan();
 
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, [visible, url]);
 
   const handleOpenLink = async () => {
@@ -62,8 +91,8 @@ export default function SecurityScanModal({ visible, url, onClose }: SecuritySca
   };
 
   const handleClose = () => {
-     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-     onClose();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onClose();
   };
 
   if (!url) return null;
@@ -72,216 +101,140 @@ export default function SecurityScanModal({ visible, url, onClose }: SecuritySca
     <Modal
       visible={visible}
       transparent={true}
-      animationType="fade"
+      animationType="slide"
       onRequestClose={handleClose}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          
-          {status === 'analyzing' && (
-            <>
-              <View style={[styles.iconCircle, { backgroundColor: 'rgba(0, 122, 255, 0.1)' }]}>
-                <ActivityIndicator size="large" color={colors.primary} />
-              </View>
-              <Text style={styles.title}>Analyzing...</Text>
-              <Text style={styles.subtitle}>Performing security analysis.</Text>
-            </>
-          )}
-
-          {status === 'safe' && (
-            <>
-              <View style={[styles.iconCircle, { backgroundColor: 'rgba(52, 199, 89, 0.1)' }]}>
-                <Ionicons name="shield-checkmark" size={40} color={colors.success} />
-              </View>
-              <Text style={styles.title}>URL is Safe</Text>
-              <Text style={styles.subtitle}>{message}</Text>
-            </>
-          )}
-
-          {status === 'suspicious' && (
-            <>
-              <View style={[styles.iconCircle, { backgroundColor: 'rgba(255, 149, 0, 0.1)' }]}>
-                <Ionicons name="warning" size={40} color="#FF9500" />
-              </View>
-              <Text style={styles.title}>Suspicious URL</Text>
-              <Text style={[styles.subtitle, { color: '#FF9500' }]}>{message}</Text>
-            </>
-          )}
-
-          {status === 'danger' && (
-            <>
-               <View style={[styles.iconCircle, { backgroundColor: 'rgba(255, 59, 48, 0.1)' }]}>
-                <Ionicons name="alert-circle" size={40} color={colors.error} />
-              </View>
-              <Text style={styles.title}>Security Threat Detected</Text>
-              <Text style={[styles.subtitle, { color: colors.error }]}>{message}</Text>
-            </>
-          )}
-
-          <View style={styles.urlContainer}>
-             <Ionicons 
-                name={status === 'safe' ? "lock-closed" : (status === 'danger' ? "warning" : "globe-outline")} 
-                size={18} 
-                color={status === 'danger' ? colors.error : colors.textLight} 
-                style={styles.urlIcon} 
-             />
-             <Text style={styles.urlText} numberOfLines={1} ellipsizeMode="middle">
-               {url}
-             </Text>
+      <View style={styles.overlay}>
+        <View style={styles.sheet}>
+          {/* ─── Header ─── */}
+          <View style={styles.header}>
+            <View style={styles.handle} />
+            <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
+              <Ionicons name="close" size={24} color={colors.textSecondary} />
+            </TouchableOpacity>
           </View>
 
-          {status !== 'analyzing' && (
-             <View style={styles.buttonContainer}>
-              {status === 'safe' ? (
-                <>
-                  <TouchableOpacity 
-                    style={styles.cancelButton} 
-                    onPress={handleClose}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.cancelButtonText}>Done</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={[styles.openButton, { backgroundColor: colors.success }]} 
-                    onPress={handleOpenLink}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.openButtonText}>Open Link</Text>
-                    <Ionicons name="open-outline" size={18} color={colors.white} style={styles.btnIconRight} />
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                   {/* DANGER STATE BUTTONS */}
-                   <TouchableOpacity 
-                    style={styles.cancelButton}
-                    onPress={handleOpenLink}
-                     activeOpacity={0.7}
-                  >
-                    <Text style={[styles.cancelButtonText, { color: colors.error, fontSize: 13 }]}>Proceed Unsafe</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={[styles.openButton, { backgroundColor: colors.error }]} 
-                    onPress={handleClose}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.openButtonText}>Go Back</Text>
-                    <Ionicons name="arrow-back-circle-outline" size={18} color={colors.white} style={styles.btnIconRight} />
-                  </TouchableOpacity>
-                </>
-              )}
+          {status === "analyzing" ? (
+            /* ─── Loading State ─── */
+            <View style={styles.loadingContainer}>
+              <View
+                style={[styles.iconCircle, { backgroundColor: colors.infoBg }]}
+              >
+                <ActivityIndicator size="large" color={colors.primary} />
+              </View>
+              <Text style={styles.loadingTitle}>Analyzing URL</Text>
+              <Text style={styles.loadingSubtitle}>
+                Running ML prediction, network checks, and domain trust
+                analysis...
+              </Text>
+              <View style={styles.urlPill}>
+                <Ionicons
+                  name="globe-outline"
+                  size={14}
+                  color={colors.textSecondary}
+                />
+                <Text
+                  style={styles.urlPillText}
+                  numberOfLines={1}
+                  ellipsizeMode="middle"
+                >
+                  {url}
+                </Text>
+              </View>
             </View>
+          ) : (
+            /* ─── Result State ─── */
+            <ScanResultView
+              url={url}
+              status={status}
+              message={message}
+              riskScore={riskScore}
+              details={details}
+              onOpenLink={handleOpenLink}
+              onClose={handleClose}
+            />
           )}
-
         </View>
       </View>
     </Modal>
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  modalOverlay: {
+  overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    justifyContent: "flex-end",
   },
-  modalContent: {
-    width: '100%',
+  sheet: {
     backgroundColor: colors.white,
-    borderRadius: 24,
-    paddingHorizontal: 25,
-    paddingTop: 30,
-    paddingBottom: 25,
-    alignItems: 'center',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: SCREEN_HEIGHT * 0.88,
+    paddingBottom: Platform.OS === "ios" ? 34 : 16,
+  },
+  header: {
+    alignItems: "center",
+    paddingTop: 10,
+    paddingBottom: 4,
+    paddingHorizontal: 20,
+  },
+  handle: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "#D1D1D6",
+  },
+  closeBtn: {
+    position: "absolute",
+    right: 16,
+    top: 10,
+    padding: 6,
+  },
+
+  // Loading
+  loadingContainer: {
+    alignItems: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 24,
   },
   iconCircle: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     marginBottom: 16,
   },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: "700",
     color: colors.textDark,
     marginBottom: 8,
-    textAlign: 'center',
   },
-  subtitle: {
-    fontSize: 15,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 22,
-  },
-  urlContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#F5F5F7',
-    padding: 12,
-    borderRadius: 12,
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 25,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  urlIcon: {
-    marginRight: 10,
-  },
-  urlText: {
-    flex: 1,
+  loadingSubtitle: {
     fontSize: 14,
-    color: colors.textDark,
-    fontWeight: '500',
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 16,
   },
-  buttonContainer: {
-    flexDirection: 'row',
-    width: '100%',
-    gap: 12,
+  urlPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    maxWidth: "90%",
   },
-  cancelButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 30,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#666',
-  },
-  openButton: {
-    flex: 1.5,
-    paddingVertical: 14,
-    borderRadius: 30,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: colors.success,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 4,
-  },
-  openButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.white,
-  },
-  btnIconRight: {
-    marginLeft: 8,
+  urlPillText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: "500",
+    flexShrink: 1,
   },
 });

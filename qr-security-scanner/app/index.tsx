@@ -1,97 +1,132 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, StatusBar, Alert, ActivityIndicator } from 'react-native';
-import { CameraView } from 'expo-camera';
+import React, { useState } from "react";
+import { View, StyleSheet, StatusBar, ActivityIndicator } from "react-native";
+import { CameraView } from "expo-camera";
 
 // Hooks
-import { useCameraPermissions } from '../src/hooks/useCameraPermissions';
-import { useScanner } from '../src/hooks/useScanner';
-import { useImageScanner } from '../src/hooks/useImageScanner';
+import { useCameraPermissions } from "../src/hooks/useCameraPermissions";
+import { useScanner } from "../src/hooks/useScanner";
+import { useImageScanner } from "../src/hooks/useImageScanner";
 
 // Components
-// import LoadingScreen from '../src/components/LoadingScreen';
-import PermissionScreen from '../src/components/PermissionScreen';
-import ScannerOverlay from '../src/components/ScannerOverlay';
-import ResultChip from '../src/components/ResultChip';
-import ScannerControls from '../src/components/ScannerControls';
-import ResultModal from '../src/components/ResultModal';
-import AnalysisModal from '../src/components/AnalysisModal';
-import SecurityScanModal from '../src/components/SecurityScanModal';
+import PermissionScreen from "../src/components/PermissionScreen";
+import ScannerOverlay from "../src/components/ScannerOverlay";
+import ResultChip from "../src/components/ResultChip";
+import ScannerControls from "../src/components/ScannerControls";
+import ResultModal from "../src/components/ResultModal";
+import AnalysisModal from "../src/components/AnalysisModal";
+import SecurityScanModal from "../src/components/SecurityScanModal";
 
 // Constants & Utils
-import { scannerColors as colors } from '../src/constants/theme';
-import { isURL } from '../src/utils/validation';
+import { scannerColors as colors } from "../src/constants/theme";
+import { detectPayloadType } from "../src/utils/validation";
+
+/**
+ * Single-state machine that replaces three independent booleans.
+ *
+ * scanning           – camera active, no modals
+ * displayingText     – ResultModal visible (non-URL payload)
+ * confirmingAnalysis – AnalysisModal visible (user decides whether to scan)
+ * analyzing          – SecurityScanModal visible (scan in progress / results)
+ */
+type AppState =
+  | "scanning"
+  | "displayingText"
+  | "confirmingAnalysis"
+  | "analyzing";
 
 export default function QRCodeScanner() {
   const { hasPermission, requestPermission } = useCameraPermissions();
-  const { scanned, scannedData, handleBarCodeScanned, resetScanner, setScanned, setScannedData } = useScanner();
-  
+  const {
+    scanned,
+    scannedData,
+    handleBarCodeScanned,
+    resetScanner,
+    setScanned,
+    setScannedData,
+  } = useScanner();
+
   // Wrapper to bridge the image scanner hook with the scanner state
   const handleImageScanSuccess = (data: string) => {
     setScanned(true);
     setScannedData(data);
   };
-  
-  const { isScanningImage, pickImage } = useImageScanner(handleImageScanSuccess);
-  
+
+  const { isScanningImage, pickImage } = useImageScanner(
+    handleImageScanSuccess,
+  );
+
   const [isFlashlightOn, setIsFlashlightOn] = useState(false);
-  const [showTextModal, setShowTextModal] = useState(false);
-  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
-  const [showSecurityScanModal, setShowSecurityScanModal] = useState(false);
+  const [appState, setAppState] = useState<AppState>("scanning");
 
   // Logic to determine what to do when user clicks the result chip
   const handleChipPress = () => {
     if (!scannedData) return;
 
-    if (isURL(scannedData)) {
-      setShowAnalysisModal(true);
+    const payloadType = detectPayloadType(scannedData);
+
+    if (payloadType === "url") {
+      setAppState("confirmingAnalysis");
     } else {
-      setShowTextModal(true);
+      setAppState("displayingText");
     }
   };
 
   const handleReset = () => {
     resetScanner();
-    setShowTextModal(false);
-    setShowAnalysisModal(false);
-    setShowSecurityScanModal(false);
+    setAppState("scanning");
   };
 
   if (hasPermission === null) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "#000",
+        }}
+      >
         <ActivityIndicator size="large" color="#0a84ff" />
       </View>
     );
   }
-  if (hasPermission === false) return <PermissionScreen onRequest={requestPermission} />;
+  if (hasPermission === false)
+    return <PermissionScreen onRequest={requestPermission} />;
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-      
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor="transparent"
+        translucent
+      />
+
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
         enableTorch={isFlashlightOn}
       />
 
-      <View style={[StyleSheet.absoluteFillObject, { zIndex: 1 }]} pointerEvents="box-none">
+      <View
+        style={[StyleSheet.absoluteFillObject, { zIndex: 1 }]}
+        pointerEvents="box-none"
+      >
         <ScannerOverlay isScanned={scanned} />
       </View>
 
-      <ResultChip 
-        data={scanned ? scannedData : null} 
-        onPress={handleChipPress} 
-        onClose={handleReset} 
+      <ResultChip
+        data={scanned ? scannedData : null}
+        onPress={handleChipPress}
+        onClose={handleReset}
       />
 
-      <ScannerControls 
-        isFlashOn={isFlashlightOn} 
+      <ScannerControls
+        isFlashOn={isFlashlightOn}
         isScanningImage={isScanningImage}
-        onFlashToggle={() => setIsFlashlightOn(!isFlashlightOn)} 
-        onGalleryPress={pickImage} 
+        onFlashToggle={() => setIsFlashlightOn(!isFlashlightOn)}
+        onGalleryPress={pickImage}
       />
 
       {isScanningImage && (
@@ -102,25 +137,22 @@ export default function QRCodeScanner() {
         </View>
       )}
 
-      <ResultModal 
-        visible={showTextModal} 
-        data={scannedData} 
+      <ResultModal
+        visible={appState === "displayingText"}
+        data={scannedData}
         onClose={handleReset}
         onScanAnother={handleReset}
       />
 
-      <AnalysisModal 
-        visible={showAnalysisModal} 
-        url={scannedData} 
-        onClose={() => setShowAnalysisModal(false)}
-        onAnalyze={() => {
-          setShowAnalysisModal(false);
-          setShowSecurityScanModal(true);
-        }}
+      <AnalysisModal
+        visible={appState === "confirmingAnalysis"}
+        url={scannedData}
+        onClose={() => setAppState("scanning")}
+        onAnalyze={() => setAppState("analyzing")}
       />
 
       <SecurityScanModal
-        visible={showSecurityScanModal}
+        visible={appState === "analyzing"}
         url={scannedData}
         onClose={handleReset}
       />
@@ -133,23 +165,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.black,
   },
-  camera: {
-    flex: 1,
-  },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    justifyContent: "center",
+    alignItems: "center",
     zIndex: 20,
   },
   loadingCard: {
     backgroundColor: colors.white,
     padding: 30,
     borderRadius: 20,
-    alignItems: 'center',
+    alignItems: "center",
     elevation: 5,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,

@@ -21,13 +21,17 @@ This project consists of two main components:
 ## Architecture
 
 ### Mobile App
+
 - Built with React Native and Expo
-- Camera permissions handling
+- Intuitive UI with risk score visualization
+- Result details with security analysis breakdown
+- Explainability cards showing threat indicators
 - Real-time scanner overlay
 - Security status modals and alerts
 - Image scanning fallback
 
 ### Backend Server
+
 - FastAPI-based REST API
 - Machine learning predictor
 - Domain reputation checking

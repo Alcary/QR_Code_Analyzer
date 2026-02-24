@@ -1,50 +1,19 @@
-# Welcome to your Expo app 👋
+# QR Code Security Scanner
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A mobile application that scans QR codes and sends URLs to the server for further analysis.
 
-## Get started
+## Features
 
-1. Install dependencies
+- **Real-Time QR Code Scanning** - Instantly captures and decodes QR codes using phone's camera
+- **Advanced URL Analysis** - Server-side security classification powered by machine learning
+- **Security Warnings** - Receive instant alerts before accessing unsafe links
+- **Risk Assessment** - Visual risk scoring with detailed threat explanations
+- **Image Fallback** - Scan QR codes from saved images when camera access isn't available
 
-   ```bash
-   npm install
-   ```
+## How It Works
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. **Scan a QR Code** - Point your camera at any QR code or select an image
+2. **URL Extraction** - The app automatically extracts the URL from the QR code
+3. **Security Analysis** - Send the URL to the server for analysis
+4. **Receive Verdict** - Get a clear security status with actionable insights
+5. **Safe Browsing** - Access only verified safe URLs with confidence
