@@ -186,7 +186,7 @@ def test_feature_extraction():
         print(f"  Suspicious TLD: {features.get('is_suspicious_tld', 0)}")
         print(f"  Has IP Address: {features.get('has_ip_address', 0)}")
         if risk_factors:
-            print(f"  Risk Factors: {', '.join(risk_factors)}")
+            print(f"  Risk Factors: {', '.join(f['message'] for f in risk_factors)}")
         print()
 
 
@@ -230,8 +230,8 @@ def test_tiered_reputation():
     test_cases = [
         # (domain, expected_tier) — without network signals, trust is structure-based
         # Shorteners always get UNTRUSTED (structure_trust = 0.0)
-        ("bit.ly", ReputationTier.SHORTENERS),      # alias for UNTRUSTED
-        ("t.co", ReputationTier.SHORTENERS),         # alias for UNTRUSTED
+        ("bit.ly", ReputationTier.UNTRUSTED),
+        ("t.co", ReputationTier.UNTRUSTED),
         # Normal domains get moderate/neutral range without network signals
         ("google.com", ReputationTier.NEUTRAL),
         ("docs.google.com", ReputationTier.NEUTRAL),

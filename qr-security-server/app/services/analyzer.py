@@ -12,15 +12,6 @@ Analysis pipeline:
 8. SHAP feature-attribution explanations
 9. Final verdict: safe / suspicious / danger
 
-v3 changes over v2:
-- Simplified from ensemble (XGBoost + CharCNN + meta-learner) to
-  XGBoost-only — more robust, no format bias, direct SHAP.
-- Risk factors now contribute to the final score (were display-only).
-- Three-signal scoring: ML (55%) + network (25%) + heuristic (20%).
-
-v2 changes over v1:
-- Computed domain trust replaces static whitelist dampening.
-- SHAP explanations attached to every prediction.
 """
 
 import asyncio
@@ -85,6 +76,8 @@ class URLAnalyzer:
             return self._result("suspicious", "Non-standard protocol", risk_score=0.5)
 
         hostname = normalize_hostname(url)
+        if not hostname:
+            return self._result("danger", "Invalid or empty hostname", risk_score=1.0)
         registered_domain = get_registered_domain(hostname)
         full_domain = get_full_domain(hostname)
         path = parsed.path
@@ -92,8 +85,12 @@ class URLAnalyzer:
         # ── 3. ML Prediction (XGBoost) ──
         # Run CPU-bound XGBoost inference in a thread to avoid blocking
         # the async event loop.
-        loop = asyncio.get_event_loop()
-        ml_result = await loop.run_in_executor(None, predictor.predict, url)
+        loop = asyncio.get_running_loop()
+        try:
+            ml_result = await loop.run_in_executor(None, predictor.predict, url)
+        except Exception as e:
+            logger.error("ML predictor raised an exception: %s", e)
+            ml_result = None
         if ml_result:
             ml_score = ml_result["ml_score"]
             xgb_score = ml_result["xgb_score"]
@@ -102,7 +99,7 @@ class URLAnalyzer:
             ml_score = 0.5
             xgb_score = 0.5
             explanation = None
-            logger.warning("ML model not loaded, using fallback score")
+            logger.warning("ML model not loaded or failed, using fallback score")
 
         # ── 4. Network Checks (parallel) ──
         net = await network_inspector.inspect_all(url, hostname, registered_domain)
@@ -130,7 +127,7 @@ class URLAnalyzer:
         )
 
         # ── 6. Network Risk Signals ──
-        network_risk, network_factors = self._compute_network_risk(net, reputation.tier)
+        network_risk, network_factors = self._compute_network_risk(net, reputation.tier, registered_domain)
 
         # ── 7. Heuristic Risk Factors ──
         risk_factors = get_risk_factors(url)
@@ -203,76 +200,86 @@ class URLAnalyzer:
     # Network Risk Scoring
     # ──────────────────────────────────────────────────────────
 
-    def _compute_network_risk(self, net, tier: ReputationTier) -> tuple[float, list[str]]:
+    def _compute_network_risk(self, net, tier: ReputationTier, registered_domain: str = "") -> tuple[float, list[dict]]:
         """
         Compute a 0.0–1.0 risk score from network signals.
-        Returns (score, list_of_factor_descriptions).
+        Returns (score, list_of_risk_factor_dicts).
         """
         risk = 0.0
-        factors: list[str] = []
+        factors: list[dict] = []
+
+        def _rf(code: str, message: str, severity: str, evidence: str | None = None) -> dict:
+            f: dict = {"code": code, "message": message, "severity": severity}
+            if evidence is not None:
+                f["evidence"] = evidence
+            return f
 
         # DNS flags
         if "very_low_ttl" in net.dns.flags:
             risk += 0.10
-            factors.append("Very low DNS TTL (fast-flux indicator)")
+            factors.append(_rf("very_low_ttl", "Very low DNS TTL (fast-flux indicator)", "high"))
         if "no_mx_records" in net.dns.flags:
             risk += 0.02
-            factors.append("No MX records")
+            factors.append(_rf("no_mx_records", "No MX records", "low"))
         if "suspicious_nameserver" in net.dns.flags:
             risk += 0.10
-            factors.append("Suspicious nameserver provider")
+            factors.append(_rf("suspicious_nameserver", "Suspicious nameserver provider", "high"))
 
         # SSL
         if net.ssl.error == "ssl_verification_failed":
             risk += 0.20
-            factors.append("SSL certificate verification failed")
+            factors.append(_rf("ssl_invalid_cert", "SSL certificate verification failed", "high"))
         elif net.ssl.is_new_cert:
             risk += 0.10
-            factors.append(f"SSL certificate is very new ({net.ssl.cert_age_days}d)")
-        if not net.ssl.valid and net.ssl.error != "ssl_connection_failed":
+            factors.append(_rf(
+                "ssl_new_cert",
+                f"SSL certificate is very new ({net.ssl.cert_age_days}d)",
+                "medium",
+                evidence=str(net.ssl.cert_age_days),
+            ))
+        if not net.ssl.valid and net.ssl.error not in ("ssl_connection_failed", "ssl_verification_failed"):
             risk += 0.05
 
         # HTTP
         if net.http.redirect_count > 3:
             risk += 0.10
-            factors.append(f"Excessive redirects ({net.http.redirect_count})")
-        is_shortener = tier == ReputationTier.UNTRUSTED
+            factors.append(_rf(
+                "excessive_redirects",
+                f"Excessive redirects ({net.http.redirect_count})",
+                "medium",
+                evidence=str(net.http.redirect_count),
+            ))
+        is_shortener = registered_domain in KNOWN_SHORTENERS
         if net.http.redirect_domain_mismatch and not is_shortener:
             risk += 0.15
-            factors.append("Redirects to different domain")
+            factors.append(_rf("cross_domain_redirect", "Redirects to different domain", "high"))
         if net.http.scheme_warning:
             risk += 0.08
-            factors.append("No HTTPS encryption")
+            factors.append(_rf("no_https", "No HTTPS encryption", "medium"))
 
-        # HTTP error status (4xx = page likely doesn't exist or blocks access)
-        if net.http.status_code and 400 <= net.http.status_code < 500:
-            risk += 0.05
-            factors.append(f"HTTP error response ({net.http.status_code})")
-
+        _content_map = {
+            "password_field":      (0.10, "page_password_field",   "Page contains password field",        "high"),
+            "billing_info_request":(0.15, "page_billing_info",     "Page requests billing information",   "high"),
+            "sensitive_id_request":(0.15, "page_sensitive_id",     "Page requests sensitive ID",          "high"),
+            "geolocation_tracking":(0.10, "page_geolocation",      "Page tracks geolocation",             "medium"),
+            "obfuscated_javascript":(0.15,"page_obfuscated_js",    "Obfuscated JavaScript detected",      "high"),
+            "excessive_iframes":   (0.10, "page_excessive_iframes","Excessive iframes (click-jacking risk)","medium"),
+        }
         for flag in net.http.content_flags:
-            if flag == "password_field":
-                risk += 0.10
-                factors.append("Page contains password field")
-            elif flag == "billing_info_request":
-                risk += 0.15
-                factors.append("Page requests billing information")
-            elif flag == "sensitive_id_request":
-                risk += 0.15
-                factors.append("Page requests sensitive ID")
-            elif flag == "geolocation_tracking":
-                risk += 0.10
-                factors.append("Page tracks geolocation")
-            elif flag == "obfuscated_javascript":
-                risk += 0.15
-                factors.append("Obfuscated JavaScript detected")
-            elif flag == "excessive_iframes":
-                risk += 0.10
-                factors.append("Excessive iframes (click-jacking risk)")
+            if flag in _content_map:
+                weight, code, message, severity = _content_map[flag]
+                risk += weight
+                factors.append(_rf(code, message, severity))
 
         # WHOIS
         if net.whois.is_new_domain:
             risk += 0.15
-            factors.append(f"Domain registered recently ({net.whois.age_days}d ago)")
+            factors.append(_rf(
+                "new_domain",
+                f"Domain registered recently ({net.whois.age_days}d ago)",
+                "high",
+                evidence=str(net.whois.age_days),
+            ))
 
         return min(1.0, risk), factors
 
@@ -280,35 +287,29 @@ class URLAnalyzer:
     # Heuristic Risk Scoring
     # ──────────────────────────────────────────────────────────
 
-    # Factors that warrant higher weight (structural threats)
-    _HIGH_WEIGHT_PATTERNS = (
-        "IP address", "credential injection", "brand", "impersonates",
-        "obfuscated", "dangerous file", "javascript:", "data URI",
-        "suspicious keyword in domain", "mixed scripts",
-        "character substitution", "confusable characters",
-    )
+    # Severity → score contribution per factor.
+    # Replaces the previous fragile substring-matching approach: any rename
+    # of a factor message would silently break scoring. Codes are stable.
+    _SEVERITY_WEIGHTS: dict[str, float] = {
+        "critical": 0.20,
+        "high":     0.12,
+        "medium":   0.06,
+        "low":      0.03,
+    }
 
-    def _compute_heuristic_risk(self, risk_factors: list[str]) -> float:
+    def _compute_heuristic_risk(self, risk_factors: list[dict]) -> float:
         """
-        Convert displayed risk factors into a 0.0–1.0 risk score.
+        Convert structured risk factors into a 0.0–1.0 risk score.
 
-        Ensures that risk factors shown in the UI actually influence
-        the final risk percentage. Uses tiered weights:
-        - High-weight factors (structural threats): 0.12 each
-        - Normal factors: 0.06 each
+        Each factor contributes according to its ``severity`` field.
         Capped at 1.0.
         """
         if not risk_factors:
             return 0.0
-
-        risk = 0.0
-        for factor in risk_factors:
-            factor_lower = factor.lower()
-            if any(p.lower() in factor_lower for p in self._HIGH_WEIGHT_PATTERNS):
-                risk += 0.12
-            else:
-                risk += 0.06
-
+        risk = sum(
+            self._SEVERITY_WEIGHTS.get(f.get("severity", "low"), 0.03)
+            for f in risk_factors
+        )
         return min(1.0, risk)
 
     # ──────────────────────────────────────────────────────────
@@ -331,13 +332,17 @@ class URLAnalyzer:
         final_score: float,
         net,
         reputation,
-        risk_factors: list[str],
+        risk_factors: list[dict],
     ) -> tuple[str, str]:
         """Return (status, message) based on all signals."""
 
         # Hard override: DNS failure = domain doesn't exist
         if net.dns.error == "domain_not_found":
             return "danger", "Domain does not exist (DNS failure)"
+
+        # Hard override: SSRF attempt — URL targeted internal/private network
+        if net.http.error in ("ssrf_blocked", "ssrf_check_failed"):
+            return "danger", "SSRF attempt blocked — URL targets internal network"
 
         # Hard override: actual server error (5xx range only)
         # Non-standard codes like 999 (LinkedIn anti-bot) are not server errors
@@ -350,12 +355,12 @@ class URLAnalyzer:
 
         # Score-based
         if final_score >= self.DANGER_THRESHOLD:
-            top_factors = ", ".join(risk_factors[:3]) if risk_factors else "multiple signals"
-            return "danger", f"High risk detected ({final_score:.0%}): {top_factors}"
+            top = ", ".join(f["message"] for f in risk_factors[:3]) if risk_factors else "multiple signals"
+            return "danger", f"High risk detected ({final_score:.0%}): {top}"
 
         if final_score >= self.SUSPICIOUS_THRESHOLD:
-            top_factors = ", ".join(risk_factors[:2]) if risk_factors else "elevated risk"
-            return "suspicious", f"Suspicious patterns ({final_score:.0%}): {top_factors}"
+            top = ", ".join(f["message"] for f in risk_factors[:2]) if risk_factors else "elevated risk"
+            return "suspicious", f"Suspicious patterns ({final_score:.0%}): {top}"
 
         # Safe — add context from trust tier
         tier = reputation.tier
