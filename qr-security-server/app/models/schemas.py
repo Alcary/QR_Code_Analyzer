@@ -1,3 +1,5 @@
+import re
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
@@ -22,6 +24,13 @@ class ScanRequest(BaseModel):
                 raise ValueError(
                     f"Unsupported scheme '{scheme}'. Allowed: {settings.ALLOWED_SCHEMES}"
                 )
+            # Also reject schemes that omit the // authority (e.g. data:, mailto:)
+            m = re.match(r"^([a-zA-Z][a-zA-Z0-9+\-.]*):(?!//)" , v)
+            if m:
+                scheme = m.group(1).lower()
+                raise ValueError(
+                    f"Unsupported scheme '{scheme}'. Allowed: {settings.ALLOWED_SCHEMES}"
+                )
             v = f"https://{v}"
 
         try:
@@ -40,6 +49,16 @@ class FeatureContribution(BaseModel):
     shap_value: float = Field(description="SHAP value (positive=risk, negative=safe)")
     feature_value: float = Field(description="Raw feature value for this URL")
     direction: str = Field(description="'risk' or 'safe'")
+
+
+class RiskFactor(BaseModel):
+    """A single identified risk signal with a stable machine-readable code."""
+    code: str = Field(description="Stable identifier, e.g. 'ip_literal_url'")
+    message: str = Field(description="Human-readable description shown in the UI")
+    severity: Literal["low", "medium", "high", "critical"] = Field(
+        description="Severity tier: drives scoring weight and UI icon colour"
+    )
+    evidence: str | None = Field(None, description="Optional supporting detail (e.g. cert age, redirect count)")
 
 
 class MLDetails(BaseModel):
@@ -79,12 +98,12 @@ class ScanDetails(BaseModel):
     ml: MLDetails | None = None
     domain: DomainDetails | None = None
     network: NetworkDetails | None = None
-    risk_factors: list[str] = []
+    risk_factors: list[RiskFactor] = []
     analysis_time_ms: int | None = None
 
 
 class ScanResult(BaseModel):
-    status: str
+    status: Literal["safe", "suspicious", "danger"]
     message: str
     risk_score: float = Field(0.0, description="Overall risk score 0.0-1.0")
     details: ScanDetails | None = None
