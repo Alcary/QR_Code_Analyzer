@@ -77,6 +77,26 @@ def test_feature_flag(url: str, feature: str, expected: int):
     )
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://bit.ly/abc123",
+        "https://t.co/xyz",
+        "https://tinyurl.com/abc",
+        "https://ow.ly/test",
+        "https://is.gd/abc",
+    ],
+)
+def test_known_shorteners_detected(url: str):
+    """top_domain_under_public_suffix must match the URL_SHORTENERS set for all known shorteners."""
+    feats = extract_features(url)
+    assert feats["is_url_shortener"] == 1, f"Expected is_url_shortener=1 for {url!r}"
+
+
+def test_non_shortener_not_flagged():
+    assert extract_features("https://example.com")["is_url_shortener"] == 0
+
+
 def test_url_length_feature():
     url = "https://example.com/" + "a" * 100
     feats = extract_features(url)
