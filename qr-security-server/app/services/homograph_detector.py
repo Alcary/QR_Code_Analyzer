@@ -188,7 +188,9 @@ def min_brand_distance(domain: str) -> tuple[int, str]:
     And also compare after normalizing confusable characters.
     """
     # Strip common prefixes
-    clean = domain.lower().lstrip("www.")
+    clean = domain.lower()
+    if clean.startswith("www."):
+        clean = clean[4:]
     normalized = normalize_confusables(clean)
 
     # Use tldextract for accurate domain name extraction
@@ -214,6 +216,51 @@ def min_brand_distance(domain: str) -> tuple[int, str]:
     return best_dist, best_brand
 
 
+# ═══════════════════════════════════════════════════════════════
+# Boundary-Based Brand Matching
+# ═══════════════════════════════════════════════════════════════
+
+def _brand_in_label(label: str, brand: str) -> bool:
+    """
+    Return True if *brand* appears as a complete token inside *label*.
+
+    Matches (for brand="apple"):
+      - exact label          : "apple"          → True
+      - hyphen/underscore    : "secure-apple"   → True
+      - brand+digits suffix  : "apple2"         → True
+      - digits+brand prefix  : "2apple"         → True
+
+    Does NOT match arbitrary substrings:
+      - "pineapple"  → False   (apple is embedded, not a whole token)
+      - "snapple"    → False
+    """
+    label = label.lower()
+    brand = brand.lower()
+
+    if label == brand:
+        return True
+    # Split by separators and check each token
+    for token in re.split(r"[-_]", label):
+        if token == brand:
+            return True
+        # brand[digits] or [digits]brand — still counted as brand impersonation
+        if re.fullmatch(rf"{re.escape(brand)}\d+|\d+{re.escape(brand)}", token):
+            return True
+    return False
+
+
+def _hostname_has_brand(hostname: str, brand: str) -> bool:
+    """
+    Return True if any dot-separated label in *hostname* contains *brand*
+    as a whole token (via `_brand_in_label`).
+
+    Splits "secure-apple.evil.com" into ["secure-apple", "evil", "com"]
+    and checks each label.
+    """
+    labels = hostname.lower().rstrip(".").split(".")
+    return any(_brand_in_label(label, brand) for label in labels)
+
+
 def detect_char_substitution(domain: str) -> bool:
     """
     Detect leet-speak / character substitution in domain.
@@ -227,7 +274,7 @@ def detect_char_substitution(domain: str) -> bool:
     normalized = normalize_confusables(name)
     if normalized != name:
         for brand_key in BRAND_DOMAINS:
-            if brand_key in normalized and brand_key not in name:
+            if _brand_in_label(normalized, brand_key) and not _brand_in_label(name, brand_key):
                 return True
 
     return False
@@ -254,19 +301,19 @@ def extract_homograph_features(domain: str) -> dict:
     normalized = normalize_confusables(domain.lower())
     clean_domain = domain.lower().rstrip(".")
 
-    # Exempt legitimate subdomains of official brand domains
-    # e.g., app.slack.com is a subdomain of slack.com → not impersonation
-    is_official_domain = any(
-        clean_domain == d
-        or clean_domain == f"www.{d}"
-        or clean_domain.endswith(f".{d}")
-        for d in BRAND_DOMAINS.values()
-    )
+    # Exempt official brand domains across all TLDs using tldextract:
+    # mail.google.co.il -> ext.domain="google" -> in BRAND_DOMAINS -> official
+    # g00gle.com        -> ext.domain="g00gle"  -> not in BRAND_DOMAINS -> phishing
+    ext = tldextract.extract(clean_domain)
+    registrable = ext.top_domain_under_public_suffix or clean_domain
+    official_domains = set(BRAND_DOMAINS.values())
+    is_official_domain = registrable in official_domains
 
     # Only flag impersonation if the domain contains a brand name
-    # AND is NOT an official (sub)domain of that brand
+    # AND is NOT an official (sub)domain of that brand.
+    # Use boundary-based matching: "pineapple.com" must NOT match "apple".
     is_exact_match = (
-        any(b in normalized for b in BRAND_DOMAINS)
+        any(_hostname_has_brand(normalized, b) for b in BRAND_DOMAINS)
         and not is_official_domain
     )
 
@@ -275,5 +322,7 @@ def extract_homograph_features(domain: str) -> dict:
         "homograph_confusable_chars": count_confusable_chars(domain),
         "homograph_min_brand_distance": min_dist,
         "homograph_has_char_sub": int(detect_char_substitution(domain)),
-        "homograph_is_exact_brand": int(is_exact_match and min_dist <= 2),
+        # `min_dist <= 2` guard removed: boundary matching is already precise
+        # so we no longer need it to suppress substring false-positives.
+        "homograph_is_exact_brand": int(is_exact_match),
     }

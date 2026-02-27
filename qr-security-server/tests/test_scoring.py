@@ -269,3 +269,46 @@ def test_decide_unreachable_with_dns_failure_is_danger():
     net.dns.resolved = False
     status, _ = _decide(0.10, net=net)
     assert status == "danger"
+
+
+# ── _decide() — UNTRUSTED tier messages ──────────────────────
+
+
+def _decide_with_tier(tier: ReputationTier, factors: list | None = None):
+    return _analyzer._decide(
+        final_score=0.10,
+        net=_clean_net(),
+        reputation=_reputation(tier),
+        risk_factors=factors or [],
+    )
+
+
+def test_decide_trusted_tier_message():
+    _, msg = _decide_with_tier(ReputationTier.TRUSTED)
+    assert "established" in msg.lower() or "verified" in msg.lower()
+
+
+def test_decide_moderate_tier_message():
+    _, msg = _decide_with_tier(ReputationTier.MODERATE)
+    assert "moderate" in msg.lower()
+
+
+def test_decide_untrusted_non_shortener_message():
+    """UNTRUSTED domain with no url_shortener factor must NOT say 'shortener'."""
+    _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[])
+    assert "shortener" not in msg.lower()
+    assert "low-trust" in msg.lower() or "low trust" in msg.lower()
+
+
+def test_decide_untrusted_shortener_factor_message():
+    """UNTRUSTED domain with url_shortener factor gets shortener-specific message."""
+    shortener_factor = {"code": "url_shortener", "message": "URL shortener", "severity": "medium"}
+    _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[shortener_factor])
+    assert "shortener" in msg.lower()
+
+
+def test_decide_untrusted_other_factor_not_shortener_message():
+    """UNTRUSTED domain with a different risk factor does not trigger shortener message."""
+    other_factor = {"code": "suspicious_tld", "message": "Suspicious TLD", "severity": "low"}
+    _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[other_factor])
+    assert "shortener" not in msg.lower()

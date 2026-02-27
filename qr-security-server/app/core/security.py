@@ -21,17 +21,24 @@ logger = logging.getLogger(__name__)
 # Header scheme: Authorization: Bearer <key>
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
+# Emit the "no API key" warning at most once per process so it doesn't
+# spam the log on every request in dev mode.
+_no_key_warned: bool = False
+
 
 async def verify_api_key(api_key: str | None = Security(_api_key_header)) -> str:
     """
     Validate the API key from the X-API-Key header.
 
     If API_KEY is not set in config (dev mode), authentication is skipped
-    with a warning logged on first request.
+    with a one-time startup warning.
     """
-    # Dev mode: no key configured → allow all (with warning)
+    global _no_key_warned
+    # Dev mode: no key configured → allow all (warn once)
     if not settings.API_KEY:
-        logger.warning("API_KEY not set — authentication disabled (dev mode)")
+        if not _no_key_warned:
+            logger.warning("API_KEY not set — authentication disabled (dev mode)")
+            _no_key_warned = True
         return "dev"
 
     if not api_key:

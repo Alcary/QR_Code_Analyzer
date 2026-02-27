@@ -26,4 +26,4 @@ scripts/              # Testing utilities
 ## API Endpoints
 
 - `GET /health` - Health check
-- `POST /api/scan` - Analyze QR code
+- `POST /api/v1/scan` - Analyze QR code

@@ -369,7 +369,12 @@ class URLAnalyzer:
         if tier == ReputationTier.MODERATE:
             return "safe", "No threats detected — moderate trust"
         if tier == ReputationTier.UNTRUSTED:
-            return "safe", "Shortened URL — destination verified safe"
+            # Only claim shortener context when the URL actually is a shortener;
+            # all other UNTRUSTED domains get a low-trust neutral message.
+            is_shortener = any(f.get("code") == "url_shortener" for f in risk_factors)
+            if is_shortener:
+                return "safe", "URL shortener — destination checked, no threats found"
+            return "safe", "No threats detected — low-trust domain"
 
         return "safe", "No threats detected"
 
