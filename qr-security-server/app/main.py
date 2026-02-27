@@ -37,9 +37,13 @@ def _get_client_ip(request: Request) -> str:
         xff = request.headers.get("X-Forwarded-For", "").strip()
         if xff:
             hops = [h.strip() for h in xff.split(",") if h.strip()]
-            # The real client is at index (len - TRUSTED_PROXY_COUNT).
-            # Clamp to 0 so we never go out of bounds.
-            idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT)
+            # XFF format: "client, proxy1, proxy2" — rightmost N entries are
+            # the TRUSTED_PROXY_COUNT known proxies.  The real client sits one
+            # position to the left of those proxies, i.e. at index:
+            #   len(hops) - TRUSTED_PROXY_COUNT - 1
+            # Example: hops=[client, proxy1], TRUSTED_PROXY_COUNT=1
+            #   idx = 2 - 1 - 1 = 0  →  hops[0] = client  ✓
+            idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT - 1)
             ip = hops[idx]
             if ip:
                 return ip

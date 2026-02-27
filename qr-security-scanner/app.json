@@ -47,7 +47,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "apiUrl": "http://192.168.1.147:8000/api/v1",
+      "apiUrl": "http://localhost:8000/api/v1",
       "apiKey": "",
       "apiTimeoutMs": 15000,
       "apiMaxRetries": 2,
