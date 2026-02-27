@@ -10,12 +10,13 @@ Runs async inspections in parallel:
 
 import asyncio
 import ipaddress
+import re
 import ssl
 import socket
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import aiohttp
 
@@ -167,7 +168,7 @@ class NetworkInspector:
     async def _check_dns(self, domain: str, registered_domain: str = "") -> DNSResult:
         """DNS resolution + TTL + MX/NS analysis."""
         result = DNSResult()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         # MX records live on the apex/registered domain, not subdomains
         mx_domain = registered_domain or domain
 
@@ -184,9 +185,9 @@ class NetworkInspector:
                 # Use low threshold (≤15s) — dns.resolver returns the
                 # *remaining* TTL from the resolver cache, not the
                 # original.  A 300s record cached 290s ago shows TTL=10.
-                # Threshold of 15 targets true fast-flux (TTL 0-5) while
-                # avoiding false positives on CDN-served domains.
-                if result.ttl is not None and result.ttl < 15:
+                # Threshold of 5 targets true fast-flux (TTL 0-3) only,
+                # avoiding false positives on CDN-cached domains.
+                if result.ttl is not None and result.ttl < 5:
                     result.flags.append("very_low_ttl")
             except dns.resolver.NXDOMAIN:
                 result.error = "domain_not_found"
@@ -236,7 +237,7 @@ class NetworkInspector:
     async def _check_ssl(self, domain: str) -> SSLResult:
         """SSL certificate analysis — validity, age, issuer, expiry."""
         result = SSLResult()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _get_cert():
             ctx = ssl.create_default_context()
@@ -286,73 +287,162 @@ class NetworkInspector:
     # ── HTTP ───────────────────────────────────────────────────
 
     async def _check_http(self, url: str, registered_domain: str) -> HTTPResult:
-        """Follow redirects, inspect content, check scheme."""
-        result = HTTPResult()
+        """
+        Follow redirects manually, inspecting each hop for SSRF.
 
-        # ── SSRF Protection ──────────────────────────────────
-        # Resolve the target hostname and block requests to private/
-        # reserved IP ranges to prevent SSRF attacks.
+        Security properties enforced:
+        - TLS certificates ARE verified (ssl=True, the aiohttp default).
+          Passing ssl=False would nullify transport security for all HTTPS
+          inspection requests — we never do that.
+        - Every redirect destination is SSRF-checked before the request is
+          made.  aiohttp's allow_redirects=True bypasses per-hop checks, so
+          we follow redirects manually with allow_redirects=False.
+        - SSRF check failures are treated as blocking errors, not silently
+          ignored — a failed check is not a safe condition.
+        - Response body is capped at MAX_RESPONSE_BYTES to prevent memory
+          exhaustion from slow-read / large-body attacks.
+        - Hard redirect cap (MAX_REDIRECTS) raises an error rather than
+          following indefinitely.
+        """
+        MAX_REDIRECTS = 10
+        MAX_RESPONSE_BYTES = 50_000  # 50 KB cap on content inspection
+
+        result = HTTPResult()
+        loop = asyncio.get_running_loop()
+
+        # ── SSRF check on the initial URL ─────────────────────
         try:
-            parsed_url = urlparse(url)
-            target_host = parsed_url.hostname or ""
-            loop = asyncio.get_event_loop()
+            initial_host = urlparse(url).hostname or ""
+            if not initial_host:
+                result.error = "invalid_url"
+                return result
             is_private = await loop.run_in_executor(
-                None, _is_private_or_reserved, target_host,
+                None, _is_private_or_reserved, initial_host
             )
             if is_private:
-                logger.warning("SSRF blocked: %s resolves to private/reserved IP", target_host)
+                logger.warning(
+                    "SSRF blocked (initial): %s resolves to private/reserved IP",
+                    initial_host,
+                )
                 result.error = "ssrf_blocked"
                 return result
-        except Exception:
-            pass  # If check fails, proceed cautiously
+        except Exception as exc:
+            # A failed SSRF check is NOT safe to ignore — block the request.
+            logger.warning("SSRF pre-check failed for %s: %s", url, exc)
+            result.error = "ssrf_check_failed"
+            return result
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
         }
+
         try:
             timeout = aiohttp.ClientTimeout(total=self.http_timeout)
+            # ssl=True (the aiohttp default) — TLS certificates are verified.
+            # We do NOT pass ssl=False.
             async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                async with session.get(url, allow_redirects=True, ssl=False) as resp:
-                    result.status_code = resp.status
-                    result.final_url = str(resp.url)
-                    result.redirect_count = len(resp.history)
-                    result.server = resp.headers.get("Server")
+                current_url = url
+                redirect_count = 0
 
-                    # Scheme warning
-                    if result.final_url.startswith("http://"):
-                        result.scheme_warning = True
-
-                    # Cross-domain redirect
-                    if result.redirect_count > 0 and registered_domain:
-                        from app.services.domain_reputation import get_registered_domain
-                        final_reg = get_registered_domain(result.final_url)
-                        if final_reg != registered_domain:
-                            result.redirect_domain_mismatch = True
-
-                    # Content inspection (HTML only, first 15KB)
-                    ctype = resp.headers.get("Content-Type", "").lower()
-                    if resp.status == 200 and "text/html" in ctype:
+                while True:
+                    # ── Per-hop SSRF check (skip for hop 0: already checked) ──
+                    if redirect_count > 0:
+                        hop_host = urlparse(current_url).hostname or ""
                         try:
-                            text = (await resp.text())[:15000].lower()
+                            is_private = await loop.run_in_executor(
+                                None, _is_private_or_reserved, hop_host
+                            )
+                            if is_private:
+                                logger.warning(
+                                    "SSRF blocked on redirect hop %d: %s",
+                                    redirect_count,
+                                    hop_host,
+                                )
+                                result.error = "ssrf_blocked"
+                                result.redirect_count = redirect_count
+                                return result
+                        except Exception as exc:
+                            logger.warning(
+                                "SSRF per-hop check failed for %s: %s", hop_host, exc
+                            )
+                            result.error = "ssrf_check_failed"
+                            result.redirect_count = redirect_count
+                            return result
 
-                            if 'type="password"' in text or 'name="password"' in text:
-                                result.content_flags.append("password_field")
-                            if any(w in text for w in ("credit card", "billing address", "cvv")):
-                                result.content_flags.append("billing_info_request")
-                            import re as _re
-                            if _re.search(r'\bssn\b|\bsocial security\b', text):
-                                result.content_flags.append("sensitive_id_request")
-                            if "geolocation.getcurrentposition" in text:
-                                result.content_flags.append("geolocation_tracking")
-                            if text.count("<iframe") > 3:
-                                result.content_flags.append("excessive_iframes")
-                            if "eval(atob(" in text or "eval(unescape(" in text:
-                                result.content_flags.append("obfuscated_javascript")
-                        except Exception:
-                            pass
+                    async with session.get(
+                        current_url,
+                        allow_redirects=False,  # we follow manually for per-hop SSRF
+                        ssl=True,               # verify TLS certificates
+                    ) as resp:
+                        if resp.status in (301, 302, 303, 307, 308):
+                            location = resp.headers.get("Location", "").strip()
+                            if not location:
+                                # Redirect with no Location — treat as terminal
+                                result.status_code = resp.status
+                                result.final_url = current_url
+                                result.redirect_count = redirect_count
+                                break
 
+                            redirect_count += 1
+                            if redirect_count > MAX_REDIRECTS:
+                                result.error = "too_many_redirects"
+                                result.redirect_count = redirect_count
+                                break
+
+                            # Resolve relative redirects against the current URL
+                            current_url = urljoin(current_url, location)
+                            continue  # check SSRF on next hop then follow
+
+                        # ── Non-redirect: process the final response ──────
+                        result.status_code = resp.status
+                        result.final_url = str(resp.url)
+                        result.redirect_count = redirect_count
+                        result.server = resp.headers.get("Server")
+
+                        if result.final_url.startswith("http://"):
+                            result.scheme_warning = True
+
+                        if redirect_count > 0 and registered_domain:
+                            from app.services.domain_reputation import get_registered_domain
+                            final_reg = get_registered_domain(result.final_url)
+                            if final_reg != registered_domain:
+                                result.redirect_domain_mismatch = True
+
+                        # Content inspection — HTML only, body capped at MAX_RESPONSE_BYTES
+                        ctype = resp.headers.get("Content-Type", "").lower()
+                        if resp.status == 200 and "text/html" in ctype:
+                            try:
+                                raw = await resp.content.read(MAX_RESPONSE_BYTES)
+                                text = raw.decode("utf-8", errors="replace").lower()
+
+                                if 'type="password"' in text or 'name="password"' in text:
+                                    result.content_flags.append("password_field")
+                                if any(w in text for w in ("credit card", "billing address", "cvv")):
+                                    result.content_flags.append("billing_info_request")
+                                if re.search(r'\bssn\b|\bsocial security\b', text):
+                                    result.content_flags.append("sensitive_id_request")
+                                if "geolocation.getcurrentposition" in text:
+                                    result.content_flags.append("geolocation_tracking")
+                                if text.count("<iframe") > 3:
+                                    result.content_flags.append("excessive_iframes")
+                                if "eval(atob(" in text or "eval(unescape(" in text:
+                                    result.content_flags.append("obfuscated_javascript")
+                            except Exception:
+                                pass
+
+                        break  # inspection complete
+
+        except aiohttp.ClientConnectorSSLError as exc:
+            # TLS certificate verification failed — the site has an invalid cert.
+            # This is distinct from site_unreachable and informs the SSL risk score.
+            logger.debug("SSL verification failed for %s: %s", url, exc)
+            result.error = "ssl_verification_failed"
         except aiohttp.ClientError:
             result.error = "site_unreachable"
         except asyncio.TimeoutError:
@@ -374,7 +464,7 @@ class NetworkInspector:
             return result
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             w = await asyncio.wait_for(
                 loop.run_in_executor(None, whois.whois, domain),
                 timeout=self.whois_timeout,
