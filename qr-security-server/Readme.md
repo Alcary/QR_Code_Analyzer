@@ -25,5 +25,48 @@ scripts/              # Testing utilities
 
 ## API Endpoints
 
-- `GET /health` - Health check
-- `POST /api/v1/scan` - Analyze QR code
+- `GET /api/v1/health` - Health check
+- `POST /api/v1/scan` - Analyze URL
+
+### POST /api/v1/scan
+
+**Request**
+
+```json
+{
+  "url": "https://example.com"
+}
+```
+
+**Response**
+
+```json
+{
+  "status": "safe",
+  "message": "No threats detected",
+  "risk_score": 0.12,
+  "details": {
+    "ml": {
+      "ml_score": 0.08,
+      "xgb_score": 0.08,
+      "dampened_score": 0.05,
+      "explanation": []
+    },
+    "domain": {
+      "registered_domain": "example.com",
+      "reputation_tier": "neutral",
+      "dampening_factor": 0.7
+    },
+    "network": {
+      "dns_resolved": true,
+      "ssl_valid": true,
+      "http_status": 200,
+      "redirect_count": 0
+    },
+    "risk_factors": [],
+    "analysis_time_ms": 320
+  }
+}
+```
+
+`status` is one of `"safe"`, `"suspicious"`, or `"danger"`.

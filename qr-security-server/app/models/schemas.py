@@ -83,7 +83,7 @@ class DomainDetails(BaseModel):
 class NetworkDetails(BaseModel):
     dns_resolved: bool | None = None
     dns_ttl: int | None = None
-    dns_flags: list[str] = []
+    dns_flags: list[str] = Field(default_factory=list)
     ssl_valid: bool | None = None
     ssl_issuer: str | None = None
     ssl_days_until_expiry: int | None = None
@@ -91,14 +91,14 @@ class NetworkDetails(BaseModel):
     http_status: int | None = None
     redirect_count: int = 0
     final_url: str | None = None
-    content_flags: list[str] = []
+    content_flags: list[str] = Field(default_factory=list)
 
 
 class ScanDetails(BaseModel):
     ml: MLDetails | None = None
     domain: DomainDetails | None = None
     network: NetworkDetails | None = None
-    risk_factors: list[RiskFactor] = []
+    risk_factors: list[RiskFactor] = Field(default_factory=list)
     analysis_time_ms: int | None = None
 
 

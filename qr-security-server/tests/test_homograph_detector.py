@@ -113,6 +113,23 @@ def test_apple_official_not_flagged():
     assert _exact_brand("apple.com") == 0  # exempt — is_official_domain=True
 
 
+def test_www_paypal_official_not_flagged():
+    """
+    Regression: www.paypal.com must be exempt.
+    The old lstrip("www.") bug would have stripped the 'w' from 'ww.paypal.com'
+    leaving 'w.paypal.com'. The current startswith("www.")+slice[4:] fix is correct.
+    top_domain_under_public_suffix of 'www.paypal.com' == 'paypal.com' which IS in
+    official_domains, so is_official_domain=True → not flagged.
+    """
+    assert _exact_brand("www.paypal.com") == 0, (
+        "www.paypal.com is an official PayPal domain and must not be flagged"
+    )
+
+
+def test_www_apple_official_not_flagged():
+    assert _exact_brand("www.apple.com") == 0
+
+
 def test_secure_apple_flagged():
     """secure-apple.com is brand impersonation — hyphen-separated token."""
     assert _exact_brand("secure-apple.com") == 1
