@@ -282,7 +282,7 @@ def extract_features(url: str) -> dict:
     f["has_brand_in_subdomain"] = int(any(b in subdomain.lower() for b in BRAND_KEYWORDS))
     f["phishing_keyword_count"] = sum(1 for k in PHISHING_KEYWORDS if k in url_lower)
     f["malware_keyword_count"] = sum(1 for k in MALWARE_KEYWORDS if k in url_lower)
-    f["is_url_shortener"] = int(ext.registered_domain in URL_SHORTENERS)
+    f["is_url_shortener"] = int(ext.top_domain_under_public_suffix in URL_SHORTENERS)
     f["has_dangerous_ext"] = int(any(path_lower.endswith(e) for e in DANGEROUS_EXTS))
     f["has_exe"] = int(path_lower.endswith(".exe"))
     f["has_php"] = int(".php" in path_lower)
