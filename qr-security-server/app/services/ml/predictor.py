@@ -27,14 +27,35 @@ from typing import Optional
 
 import numpy as np
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
+
+# Server root = the directory that contains the `app/` package.
+# Resolving relative to __file__ makes the path CWD-independent:
+# uvicorn can be launched from any working directory.
+#   predictor.py  →  app/services/ml/predictor.py
+#   parents[3]    →  <server-root>/  (sibling of app/)
+_SERVER_ROOT = Path(__file__).resolve().parents[3]
 
 
 class MLPredictor:
     """XGBoost-based URL classifier with SHAP explanations."""
 
-    def __init__(self, model_dir: str = "models"):
-        self.model_dir = Path(model_dir)
+    def __init__(self, model_dir: str | Path | None = None):
+        # Resolve model directory:
+        #   1. If an explicit path is given, use it as-is (absolute) or
+        #      relative to CWD (useful for tests).
+        #   2. Otherwise, take settings.MODEL_DIR and resolve it relative to
+        #      the server root so the server works regardless of the CWD from
+        #      which uvicorn / the test runner is invoked.
+        if model_dir is not None:
+            self.model_dir = Path(model_dir)
+        else:
+            cfg_path = Path(settings.MODEL_DIR)
+            self.model_dir = (
+                cfg_path if cfg_path.is_absolute() else _SERVER_ROOT / cfg_path
+            )
         self.loaded = False
         self.xgb_model = None
         self.feature_names: list[str] = []
@@ -153,5 +174,5 @@ class MLPredictor:
             return None
 
 
-# Singleton
+# Singleton — model directory resolved from settings, CWD-independent.
 predictor = MLPredictor()
