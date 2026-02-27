@@ -9,7 +9,7 @@
  *   - API key authentication (X-API-Key header)
  */
 
-import { API_CONFIG } from '../constants/api';
+import { API_CONFIG } from "../constants/api";
 
 // ── Response Interfaces ─────────────────────────────────────
 
@@ -17,7 +17,18 @@ export interface FeatureContribution {
   feature: string;
   shap_value: number;
   feature_value: number;
-  direction: 'risk' | 'safe';
+  direction: "risk" | "safe";
+}
+
+export interface RiskFactor {
+  /** Stable machine-readable identifier, e.g. 'ip_literal_url' */
+  code: string;
+  /** Human-readable description shown in the UI */
+  message: string;
+  /** Drives scoring weight and icon colour */
+  severity: "low" | "medium" | "high" | "critical";
+  /** Optional supporting detail (e.g. redirect count, cert age) */
+  evidence?: string | null;
 }
 
 export interface MLDetails {
@@ -55,12 +66,12 @@ export interface ScanDetails {
   ml?: MLDetails | null;
   domain?: DomainDetails | null;
   network?: NetworkDetails | null;
-  risk_factors: string[];
+  risk_factors: RiskFactor[];
   analysis_time_ms?: number | null;
 }
 
 export interface ScanResult {
-  status: 'safe' | 'danger' | 'suspicious';
+  status: "safe" | "danger" | "suspicious";
   message: string;
   risk_score: number;
   details?: ScanDetails | null;
@@ -96,7 +107,7 @@ async function fetchWithTimeout(
  */
 function isRetryable(error: unknown): boolean {
   if (error instanceof TypeError) return true; // Network error
-  if (error instanceof DOMException && error.name === 'AbortError') return true; // Timeout
+  if (error instanceof DOMException && error.name === "AbortError") return true; // Timeout
   return false;
 }
 
@@ -111,16 +122,16 @@ function sleep(ms: number): Promise<void> {
 
 export const scanURL = async (url: string): Promise<ScanResult> => {
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   };
 
   // Include API key if configured
   if (API_CONFIG.apiKey) {
-    headers['X-API-Key'] = API_CONFIG.apiKey;
+    headers["X-API-Key"] = API_CONFIG.apiKey;
   }
 
   const requestOptions: RequestInit = {
-    method: 'POST',
+    method: "POST",
     headers,
     body: JSON.stringify({ url }),
   };
@@ -138,8 +149,8 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
       // Non-retryable HTTP errors
       if (response.status === 401 || response.status === 403) {
         return {
-          status: 'suspicious',
-          message: 'Authentication error with security server.',
+          status: "suspicious",
+          message: "Authentication error with security server.",
           risk_score: 0,
         };
       }
@@ -147,16 +158,16 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
       if (response.status === 422) {
         const errorData = await response.json().catch(() => null);
         return {
-          status: 'suspicious',
-          message: errorData?.detail?.[0]?.msg || 'Invalid URL format.',
+          status: "suspicious",
+          message: errorData?.detail?.[0]?.msg || "Invalid URL format.",
           risk_score: 0,
         };
       }
 
       if (response.status === 429) {
         return {
-          status: 'suspicious',
-          message: 'Too many requests. Please wait a moment and try again.',
+          status: "suspicious",
+          message: "Too many requests. Please wait a moment and try again.",
           risk_score: 0,
         };
       }
@@ -187,16 +198,16 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
   }
 
   // All attempts exhausted
-  console.error('[apiService] All attempts failed:', lastError);
+  console.error("[apiService] All attempts failed:", lastError);
 
   const isTimeout =
-    lastError instanceof DOMException && lastError.name === 'AbortError';
+    lastError instanceof DOMException && lastError.name === "AbortError";
 
   return {
-    status: 'suspicious',
+    status: "suspicious",
     message: isTimeout
-      ? 'Request timed out. Check your network connection.'
-      : 'Could not connect to security server. Check your network.',
+      ? "Request timed out. Check your network connection."
+      : "Could not connect to security server. Check your network.",
     risk_score: 0,
   };
 };

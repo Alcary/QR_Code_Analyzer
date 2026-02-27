@@ -8,7 +8,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { scannerColors as colors } from "../constants/theme";
-import type { ScanDetails } from "../services/apiService";
+import type { ScanDetails, RiskFactor } from "../services/apiService";
 import RiskScoreRing from "./RiskScoreRing";
 import TrustIndicator from "./TrustIndicator";
 import ExplainabilityCard from "./ExplainabilityCard";
@@ -98,10 +98,10 @@ export default function ScanResultView({
       {riskFactors.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Risk Factors</Text>
-          {riskFactors.map((factor, i) => (
+          {riskFactors.map((factor: RiskFactor, i: number) => (
             <View key={i} style={styles.factorRow}>
               <Ionicons name="alert-circle" size={14} color={colors.warning} />
-              <Text style={styles.factorText}>{factor}</Text>
+              <Text style={styles.factorText}>{factor.message}</Text>
             </View>
           ))}
         </View>

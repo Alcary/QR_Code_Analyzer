@@ -296,12 +296,11 @@ def extract_features(url: str) -> dict:
     f["has_javascript"] = int("javascript:" in url_lower)
     f["has_base64"] = int(bool(re.search(r"[A-Za-z0-9+/]{20,}={0,2}", url)))
     f["brand_in_domain"] = int(any(b in domain for b in BRAND_KEYWORDS))
+    # Use ext.domain (registered name without TLD) to correctly identify official
+    # brand domains across all TLDs, e.g. mail.google.co.il → ext.domain="google"
     f["brand_not_registered"] = int(
         f["brand_in_domain"] == 1
-        and not any(
-            domain == f"{b}.com" or domain == f"www.{b}.com"
-            for b in BRAND_KEYWORDS
-        )
+        and ext.domain not in BRAND_KEYWORDS
     )
 
     # ═══ HOMOGRAPH / TYPOSQUATTING ═══
@@ -325,68 +324,98 @@ def extract_features(url: str) -> dict:
 FEATURE_NAMES = list(extract_features("https://www.example.com/path?q=1").keys())
 
 
-def get_risk_factors(url: str) -> list[str]:
-    """Generate human-readable risk factor descriptions from URL features."""
+def get_risk_factors(url: str) -> list[dict]:
+    """
+    Return structured risk factors derived from URL features.
+
+    Each entry is a dict with keys: code, message, severity, evidence (optional).
+    The ``code`` field is a stable machine-readable identifier; never change it
+    without a schema migration because scoring logic and client rendering depend on it.
+
+    Severity weights used in analyzer._compute_heuristic_risk:
+        critical → 0.20   high → 0.12   medium → 0.06   low → 0.03
+    """
     feats = extract_features(url)
-    factors = []
+    factors: list[dict] = []
+
+    def _rf(code: str, message: str, severity: str, evidence: str | None = None) -> dict:
+        f: dict = {"code": code, "message": message, "severity": severity}
+        if evidence is not None:
+            f["evidence"] = evidence
+        return f
 
     if feats.get("has_ip_address"):
-        factors.append("Uses IP address instead of domain name")
+        factors.append(_rf("ip_literal_url", "Uses IP address instead of domain name", "high"))
     if feats.get("has_at_symbol"):
-        factors.append("Contains @ symbol (credential injection risk)")
+        factors.append(_rf("credential_injection", "Contains @ symbol (credential injection risk)", "high"))
     if feats.get("has_double_slash_in_path"):
-        factors.append("Contains redirect pattern in path")
+        factors.append(_rf("redirect_pattern", "Contains redirect pattern in path", "medium"))
     if feats.get("domain_entropy", 0) > 4.0:
-        factors.append("Domain appears randomly generated")
+        factors.append(_rf(
+            "high_domain_entropy", "Domain appears randomly generated", "high",
+            evidence=f"entropy={feats['domain_entropy']:.2f}",
+        ))
     if feats.get("is_suspicious_tld"):
-        factors.append("Uses suspicious TLD")
+        factors.append(_rf("suspicious_tld", "Uses suspicious TLD", "medium"))
     if feats.get("subdomain_count", 0) > 3:
-        factors.append(f"Excessive subdomains ({feats['subdomain_count']})")
+        n = feats["subdomain_count"]
+        factors.append(_rf("excessive_subdomains", f"Excessive subdomains ({n})", "medium", evidence=str(n)))
     if feats.get("url_length", 0) > 200:
-        factors.append("Unusually long URL")
+        factors.append(_rf("long_url", "Unusually long URL", "low", evidence=str(feats["url_length"])))
     if feats.get("has_port"):
-        factors.append("Uses non-standard port")
+        factors.append(_rf("non_standard_port", "Uses non-standard port", "medium"))
     if feats.get("has_punycode"):
-        factors.append("Contains punycode (internationalized domain)")
+        factors.append(_rf("punycode_domain", "Contains punycode (internationalized domain)", "medium"))
     if feats.get("brand_not_registered"):
-        factors.append("Brand keyword in non-official domain")
+        factors.append(_rf("brand_in_unofficial_domain", "Brand keyword in non-official domain", "high"))
     if feats.get("has_brand_in_subdomain"):
-        factors.append("Brand name used in subdomain")
+        factors.append(_rf("brand_in_subdomain", "Brand name used in subdomain", "medium"))
     if feats.get("phishing_keyword_count", 0) >= 2:
-        factors.append("Multiple phishing keywords detected")
+        factors.append(_rf(
+            "phishing_keywords", "Multiple phishing keywords detected", "medium",
+            evidence=str(feats["phishing_keyword_count"]),
+        ))
     if feats.get("has_dangerous_ext"):
-        factors.append("Links to potentially dangerous file type")
+        factors.append(_rf("dangerous_filetype", "Links to potentially dangerous file type", "high"))
     if feats.get("has_embedded_url"):
-        factors.append("URL embedded within path")
+        factors.append(_rf("embedded_url", "URL embedded within path", "medium"))
     if feats.get("has_hex_encoding"):
-        factors.append("Contains hex-encoded characters")
+        factors.append(_rf("hex_encoding", "Contains hex-encoded characters", "low"))
     if feats.get("is_url_shortener"):
-        factors.append("URL shortener — destination hidden")
+        factors.append(_rf("url_shortener", "URL shortener — destination hidden", "medium"))
     if feats.get("has_data_uri"):
-        factors.append("Data URI — may contain embedded content")
+        factors.append(_rf("data_uri", "Data URI — may contain embedded content", "high"))
     if feats.get("has_javascript"):
-        factors.append("Contains javascript: protocol")
+        factors.append(_rf("javascript_protocol", "Contains javascript: protocol", "critical"))
 
-    # ═══ Homograph-specific risk factors ═══
+    # ═══ Homograph / typosquatting ═══
     if feats.get("homograph_has_mixed_scripts"):
-        factors.append("Domain mixes scripts (IDN homograph attack indicator)")
+        factors.append(_rf("mixed_scripts", "Domain mixes scripts (IDN homograph attack indicator)", "high"))
     if feats.get("homograph_confusable_chars", 0) > 0:
-        factors.append("Domain contains visually confusable characters")
+        factors.append(_rf("confusable_chars", "Domain contains visually confusable characters", "high"))
     if feats.get("homograph_has_char_sub"):
-        factors.append("Character substitution detected (e.g., g00gle, paypa1)")
+        factors.append(_rf("char_substitution", "Character substitution detected (e.g., g00gle, paypa1)", "high"))
     if feats.get("homograph_is_exact_brand"):
-        factors.append("Domain impersonates a known brand")
+        factors.append(_rf("brand_impersonation", "Domain impersonates a known brand", "critical"))
     if feats.get("homograph_min_brand_distance", 999) <= 2 and feats.get("brand_not_registered"):
-        factors.append("Domain is suspiciously similar to a known brand")
+        factors.append(_rf("brand_lookalike", "Domain is suspiciously similar to a known brand", "high"))
     if feats.get("domain_bigram_score", 1.0) < 0.10:
-        factors.append("Domain name appears randomly generated")
+        factors.append(_rf(
+            "random_domain_bigram", "Domain name appears randomly generated", "high",
+            evidence=f"bigram_score={feats['domain_bigram_score']:.3f}",
+        ))
 
-    # ═══ Suspicious domain keyword detection ═══
+    # ═══ Suspicious keyword in domain ═══
     risk_ext = tldextract.extract(url)
     domain_word = risk_ext.domain or ""
     for kw in SUSPICIOUS_DOMAIN_KEYWORDS:
         if kw in domain_word:
-            factors.append(f"Suspicious keyword in domain name: '{kw}'")
+            factors.append(_rf(
+                "suspicious_domain_keyword",
+                f"Suspicious keyword in domain name: '{kw}'",
+                "high",
+                evidence=kw,
+            ))
             break
 
     return factors
