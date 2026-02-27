@@ -81,7 +81,7 @@ export interface ScanResult {
 
 /**
  * Fetch with an AbortController-based timeout.
- * Throws on timeout, network error, or non-OK status.
+ * Throws on timeout/network error; returns Response even if non-OK.
  */
 async function fetchWithTimeout(
   url: string,
@@ -146,67 +146,92 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
         API_CONFIG.timeoutMs,
       );
 
-      // Non-retryable HTTP errors
-      if (response.status === 401 || response.status === 403) {
-        // Throw so the caller's error handler shows a config error message,
-        // not a misleading scan verdict with status='suspicious'.
-        throw new Error(
-          response.status === 401
-            ? "Server requires an API key. Set apiKey in app.json extra."
-            : "Invalid API key. Check apiKey in app.json extra.",
-        );
-      }
+      // ── Soft / expected error responses ─────────────────────────────
+      // Return a ScanResult directly so the UI shows a clear message
+      // without treating these as exceptions.
 
       if (response.status === 422) {
         const errorData = await response.json().catch(() => null);
         return {
-          status: "suspicious",
-          message: errorData?.detail?.[0]?.msg || "Invalid URL format.",
+          status: "suspicious" as const,
+          message: errorData?.detail?.[0]?.msg ?? "Invalid URL format.",
           risk_score: 0,
         };
       }
 
       if (response.status === 429) {
         return {
-          status: "suspicious",
+          status: "suspicious" as const,
           message: "Too many requests. Please wait a moment and try again.",
           risk_score: 0,
         };
       }
 
+      // ── Hard non-retryable errors — throw so the caller gets the message
+      // SecurityScanModal catches thrown errors and shows error.message,
+      // which is the right UX for configuration / permission problems.
+
+      if (response.status === 401) {
+        throw new Error(
+          "Server requires an API key. Set apiKey in app.json extra.",
+        );
+      }
+      if (response.status === 403) {
+        throw new Error("Invalid API key. Check apiKey in app.json extra.");
+      }
+
+      // ── Retryable 5xx — sleep and retry while attempts remain ────────
+      if (response.status >= 500 && attempt < API_CONFIG.maxRetries) {
+        lastError = new Error(`Server error: ${response.status}`);
+        await sleep(API_CONFIG.retryDelayMs * Math.pow(2, attempt));
+        continue;
+      }
+
+      // ── Any other non-OK response (other 4xx, final exhausted 5xx) ──
       if (!response.ok) {
-        // Server error — retryable
-        if (response.status >= 500 && attempt < API_CONFIG.maxRetries) {
-          lastError = new Error(`Server error: ${response.status}`);
-          await sleep(API_CONFIG.retryDelayMs * Math.pow(2, attempt));
-          continue;
-        }
         throw new Error(`Server error: ${response.status}`);
       }
 
-      const data = await response.json();
+      const data: ScanResult = await response.json();
       return data;
     } catch (error) {
       lastError = error;
 
-      if (attempt < API_CONFIG.maxRetries && isRetryable(error)) {
+      // Retryable (network outage, AbortError timeout) with attempts left:
+      // back off and retry.
+      if (isRetryable(error) && attempt < API_CONFIG.maxRetries) {
         console.warn(
-          `[apiService] Attempt ${attempt + 1} failed, retrying in ${API_CONFIG.retryDelayMs * Math.pow(2, attempt)}ms...`,
+          `[apiService] Attempt ${attempt + 1} failed, retrying in ${
+            API_CONFIG.retryDelayMs * Math.pow(2, attempt)
+          }ms...`,
         );
         await sleep(API_CONFIG.retryDelayMs * Math.pow(2, attempt));
         continue;
       }
+
+      // Non-retryable (thrown Error from the try block above) OR a retryable
+      // error on the final attempt: stop the loop.
+      // Re-throw non-retryable errors immediately so the exact message
+      // reaches SecurityScanModal without being replaced by a generic string.
+      if (!isRetryable(error)) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+
+      // Retryable + exhausted: fall through to the tail below.
     }
   }
 
-  // All attempts exhausted
-  console.error("[apiService] All attempts failed:", lastError);
+  // Only reachable when all retry attempts are exhausted by a transient
+  // network failure (TypeError) or timeout (AbortError).
+  console.error("[apiService] All retry attempts exhausted:", lastError);
 
   const isTimeout =
     lastError instanceof DOMException && lastError.name === "AbortError";
+  const isServerError =
+    lastError instanceof Error && lastError.message.startsWith("Server error:");
 
   return {
-    status: "suspicious",
+    status: "suspicious" as const,
     message: isTimeout
       ? "Request timed out. Check your network connection."
       : "Could not connect to security server. Check your network.",

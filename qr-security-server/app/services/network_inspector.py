@@ -493,5 +493,9 @@ class NetworkInspector:
         return result
 
 
-# Singleton
-network_inspector = NetworkInspector()
+# Singleton — timeouts wired from application settings
+from app.core.config import settings as _settings
+network_inspector = NetworkInspector(
+    http_timeout=_settings.NETWORK_TIMEOUT,
+    whois_timeout=_settings.WHOIS_TIMEOUT,
+)

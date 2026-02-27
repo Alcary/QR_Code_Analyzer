@@ -15,7 +15,15 @@ from collections import Counter
 
 import tldextract
 
-from app.services.homograph_detector import extract_homograph_features
+from app.services.homograph_detector import (
+    extract_homograph_features,
+    BRAND_DOMAINS as _BRAND_DOMAINS,
+    _brand_in_label,
+    _hostname_has_brand,
+)
+
+# Set of official brand domains used for strict "is official" checks
+_OFFICIAL_BRAND_DOMAINS: frozenset[str] = frozenset(_BRAND_DOMAINS.values())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -296,11 +304,13 @@ def extract_features(url: str) -> dict:
     f["has_javascript"] = int("javascript:" in url_lower)
     f["has_base64"] = int(bool(re.search(r"[A-Za-z0-9+/]{20,}={0,2}", url)))
     f["brand_in_domain"] = int(any(b in domain for b in BRAND_KEYWORDS))
-    # Use ext.domain (registered name without TLD) to correctly identify official
-    # brand domains across all TLDs, e.g. mail.google.co.il → ext.domain="google"
+    # Strict official-domain check: compare full registrable domain
+    # (e.g. "paypal.net") against known official brand domains ("paypal.com").
+    # Using ext.domain (just the SLD, no TLD) was wrong: it would exempt
+    # paypal.net because ext.domain == "paypal" which is in BRAND_KEYWORDS.
     f["brand_not_registered"] = int(
         f["brand_in_domain"] == 1
-        and ext.domain not in BRAND_KEYWORDS
+        and (ext.top_domain_under_public_suffix or "") not in _OFFICIAL_BRAND_DOMAINS
     )
 
     # ═══ HOMOGRAPH / TYPOSQUATTING ═══
@@ -338,6 +348,30 @@ def get_risk_factors(url: str) -> list[dict]:
     feats = extract_features(url)
     factors: list[dict] = []
 
+    # ── Boundary-based brand signals (risk factors only) ──────────────────────
+    # ML features (brand_in_domain, has_brand_in_subdomain, brand_not_registered)
+    # use substring / SLD-only matching for training-parity and MUST NOT gate
+    # user-facing risk factors.  Substring checks cause false positives on
+    # unrelated words like "pineapple" (contains "apple") or "snapple".
+    # We re-derive brand presence here using the same boundary-based matcher
+    # that powers homograph_is_exact_brand, so the two layers are consistent.
+    _rf_ext = tldextract.extract(url.lower())
+    _registrable = _rf_ext.top_domain_under_public_suffix or ""
+    _is_official_brand_domain = _registrable in _OFFICIAL_BRAND_DOMAINS
+    # Does the SLD label (e.g. "paypal" in "paypal-secure.com") boundary-match
+    # any known brand key?  _brand_in_label handles hyphen/digit separators
+    # so "paypal-secure" matches "paypal" but "pineapple" does NOT match "apple".
+    _domain_label = _rf_ext.domain or ""
+    _boundary_brand_in_domain = any(
+        _brand_in_label(_domain_label, brand) for brand in _BRAND_DOMAINS
+    )
+    # Does any dot-separated subdomain label boundary-match a brand?
+    _subdomain_str = _rf_ext.subdomain or ""
+    _boundary_brand_in_subdomain = bool(
+        _subdomain_str
+        and any(_hostname_has_brand(_subdomain_str, brand) for brand in _BRAND_DOMAINS)
+    )
+
     def _rf(code: str, message: str, severity: str, evidence: str | None = None) -> dict:
         f: dict = {"code": code, "message": message, "severity": severity}
         if evidence is not None:
@@ -366,9 +400,11 @@ def get_risk_factors(url: str) -> list[dict]:
         factors.append(_rf("non_standard_port", "Uses non-standard port", "medium"))
     if feats.get("has_punycode"):
         factors.append(_rf("punycode_domain", "Contains punycode (internationalized domain)", "medium"))
-    if feats.get("brand_not_registered"):
+    # Use boundary-based matching (not substring / Levenshtein) so that
+    # "pineapple.com" and "snapple.com" are never flagged for "apple".
+    if _boundary_brand_in_domain and not _is_official_brand_domain:
         factors.append(_rf("brand_in_unofficial_domain", "Brand keyword in non-official domain", "high"))
-    if feats.get("has_brand_in_subdomain"):
+    if _boundary_brand_in_subdomain:
         factors.append(_rf("brand_in_subdomain", "Brand name used in subdomain", "medium"))
     if feats.get("phishing_keyword_count", 0) >= 2:
         factors.append(_rf(
@@ -397,7 +433,25 @@ def get_risk_factors(url: str) -> list[dict]:
         factors.append(_rf("char_substitution", "Character substitution detected (e.g., g00gle, paypa1)", "high"))
     if feats.get("homograph_is_exact_brand"):
         factors.append(_rf("brand_impersonation", "Domain impersonates a known brand", "critical"))
-    if feats.get("homograph_min_brand_distance", 999) <= 2 and feats.get("brand_not_registered"):
+    # brand_lookalike: domain name is close to a known brand but not an exact
+    # boundary match (that case is already covered by brand_in_unofficial_domain
+    # or brand_impersonation above).
+    # Extra-suspicion signals tighten the distance-2 case so that innocent
+    # close strings like "snapple" (dist 2 to "apple", no confusables/char-sub)
+    # are never flagged, while deliberate fakes like "gooogle.com" (dist 1) or
+    # "paypa1.com" (char-sub) are still caught.
+    _min_dist = feats.get("homograph_min_brand_distance", 999)
+    _has_extra_suspicion = bool(
+        feats.get("homograph_confusable_chars", 0) > 0
+        or feats.get("homograph_has_char_sub")
+        or feats.get("has_punycode")
+        or feats.get("phishing_keyword_count", 0) > 0
+    )
+    if (
+        (_min_dist <= 1 or (_min_dist == 2 and _has_extra_suspicion))
+        and not _is_official_brand_domain
+        and not _boundary_brand_in_domain  # already covered by brand_in_unofficial_domain
+    ):
         factors.append(_rf("brand_lookalike", "Domain is suspiciously similar to a known brand", "high"))
     if feats.get("domain_bigram_score", 1.0) < 0.10:
         factors.append(_rf(

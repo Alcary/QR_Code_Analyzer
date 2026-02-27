@@ -85,6 +85,20 @@ def test_whitespace_trimmed_from_hops():
         assert _get_client_ip(req) == "203.0.113.5"
 
 
+def test_ipv4_port_suffix_stripped():
+    """XFF entries with :port should return only the address."""
+    req = _make_request(xff="203.0.113.5:12345, 10.0.0.1")
+    with _with_proxy_count(1):
+        assert _get_client_ip(req) == "203.0.113.5"
+
+
+def test_ipv6_address_not_port_stripped():
+    """Bracketed IPv6 addresses must not be mangled."""
+    req = _make_request(xff="[2001:db8::1], 10.0.0.1")
+    with _with_proxy_count(1):
+        assert _get_client_ip(req) == "[2001:db8::1]"
+
+
 def test_no_client_and_no_xff_returns_unknown():
     req = MagicMock()
     req.client = None

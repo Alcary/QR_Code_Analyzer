@@ -301,9 +301,12 @@ def extract_homograph_features(domain: str) -> dict:
     normalized = normalize_confusables(domain.lower())
     clean_domain = domain.lower().rstrip(".")
 
-    # Exempt official brand domains across all TLDs using tldextract:
-    # mail.google.co.il -> ext.domain="google" -> in BRAND_DOMAINS -> official
-    # g00gle.com        -> ext.domain="g00gle"  -> not in BRAND_DOMAINS -> phishing
+    # Exempt only the registrable domain that exactly matches an official brand domain
+    # (e.g. paypal.com, apple.com from BRAND_DOMAINS.values()).
+    # Uses top_domain_under_public_suffix so paypal.co.uk is exempt but paypal.net is not.
+    # Example: mail.google.co.il → top_domain="google.co.il" → NOT in official_domains
+    #          google.com         → top_domain="google.com"   → in official_domains → exempt
+    #          g00gle.com         → top_domain="g00gle.com"   → NOT in official_domains → flagged
     ext = tldextract.extract(clean_domain)
     registrable = ext.top_domain_under_public_suffix or clean_domain
     official_domains = set(BRAND_DOMAINS.values())

@@ -45,6 +45,9 @@ def _get_client_ip(request: Request) -> str:
             #   idx = 2 - 1 - 1 = 0  →  hops[0] = client  ✓
             idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT - 1)
             ip = hops[idx]
+            # Strip optional :port suffix (IPv4: "1.2.3.4:5678", not IPv6 brackets)
+            if ":" in ip and not ip.startswith("["):
+                ip, _, _ = ip.rpartition(":")
             if ip:
                 return ip
     return request.client.host if request.client else "unknown"

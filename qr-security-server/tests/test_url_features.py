@@ -182,3 +182,94 @@ def test_evidence_field_present_for_quantitative_factors():
     subdomain_factors = [f for f in factors if f["code"] == "excessive_subdomains"]
     if subdomain_factors:
         assert "evidence" in subdomain_factors[0]
+
+
+# ── brand_not_registered — official-domain strictness ─────────
+
+
+def test_official_paypal_not_flagged_as_brand_not_registered():
+    """paypal.com is the official domain — brand_not_registered must be 0."""
+    feats = extract_features("https://paypal.com/login")
+    assert feats["brand_not_registered"] == 0, (
+        "paypal.com is official and must NOT set brand_not_registered=1"
+    )
+
+
+def test_paypal_net_flagged_as_brand_not_registered():
+    """paypal.net is NOT an official PayPal domain — brand_not_registered must be 1."""
+    feats = extract_features("https://paypal.net/wallet")
+    assert feats["brand_not_registered"] == 1, (
+        "paypal.net is not official and must set brand_not_registered=1"
+    )
+
+
+def test_google_com_not_flagged():
+    feats = extract_features("https://google.com/search?q=test")
+    assert feats["brand_not_registered"] == 0
+
+
+def test_google_evil_io_flagged():
+    feats = extract_features("https://google.evil.io/page")
+    assert feats["brand_not_registered"] == 1
+
+
+def test_no_brand_keyword_keeps_flag_zero():
+    """Domains with no brand keyword must not set brand_not_registered."""
+    feats = extract_features("https://example.com")
+    assert feats["brand_not_registered"] == 0
+
+
+# ── brand_in_unofficial_domain false-positive regressions ─────
+
+
+def test_pineapple_does_not_emit_brand_in_unofficial_domain():
+    """
+    Regression: 'apple' is a substring of 'pineapple', but the domain is
+    completely unrelated to Apple Inc.  The boundary-based matcher checks
+    whether 'apple' appears as a *whole token* inside 'pineapple' — it does not
+    (pineapple → split by separators → ['pineapple'] → no match), so
+    brand_in_unofficial_domain and brand_in_subdomain must NOT fire.
+    """
+    codes = [f["code"] for f in get_risk_factors("https://pineapple.com")]
+    assert "brand_in_unofficial_domain" not in codes, (
+        "pineapple.com must NOT trigger brand_in_unofficial_domain (substring false positive)"
+    )
+
+
+def test_snapple_does_not_emit_brand_in_unofficial_domain():
+    """
+    Regression: 'snapple.com' contains 'apple' as a substring AND has
+    Levenshtein distance 2 to 'apple'.  Neither the substring FP nor the
+    distance-2 case (which lacks extra suspicion signals) must produce a
+    brand-related risk factor.
+    """
+    codes = [f["code"] for f in get_risk_factors("https://snapple.com")]
+    assert "brand_in_unofficial_domain" not in codes, (
+        "snapple.com must NOT trigger brand_in_unofficial_domain"
+    )
+    assert "brand_lookalike" not in codes, (
+        "snapple.com must NOT trigger brand_lookalike — distance 2 without extra suspicion"
+    )
+
+
+def test_paypal_net_emits_brand_in_unofficial_domain():
+    """
+    paypal.net is a genuine PayPal lookalike (distance 0: 'paypal' == 'paypal').
+    brand_in_unofficial_domain MUST fire.
+    """
+    codes = [f["code"] for f in get_risk_factors("https://paypal.net/wallet")]
+    assert "brand_in_unofficial_domain" in codes or "brand_impersonation" in codes, (
+        "paypal.net must be flagged as brand impersonation"
+    )
+
+
+def test_paypal_secure_emits_brand_in_unofficial_domain():
+    """
+    Regression: paypal-secure.com uses a hyphen-separated brand token
+    'paypal' inside the SLD.  _brand_in_label splits by hyphen and finds
+    'paypal' as a whole token, so brand_in_unofficial_domain must fire.
+    """
+    codes = [f["code"] for f in get_risk_factors("https://paypal-secure.com/login")]
+    assert "brand_in_unofficial_domain" in codes or "brand_impersonation" in codes, (
+        "paypal-secure.com must be flagged — 'paypal' is a boundary-matched token"
+    )
