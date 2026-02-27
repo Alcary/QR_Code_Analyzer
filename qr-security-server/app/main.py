@@ -18,6 +18,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _get_client_ip(request: Request) -> str:
+    """
+    Extract the real client IP, handling reverse proxies.
+
+    When TRUSTED_PROXY_COUNT > 0, parse X-Forwarded-For and strip that
+    many proxy hops from the right to reach the original client address.
+
+    Example with TRUSTED_PROXY_COUNT=1:
+        X-Forwarded-For: 203.0.113.5, 10.0.0.1
+        Rightmost hop (10.0.0.1) is the proxy itself — real client is 203.0.113.5.
+
+    Only set TRUSTED_PROXY_COUNT > 0 when a real trusted proxy is confirmed
+    in front of this server. Without a proxy, clients can forge the header
+    and bypass rate limiting.
+    """
+    if settings.TRUSTED_PROXY_COUNT > 0:
+        xff = request.headers.get("X-Forwarded-For", "").strip()
+        if xff:
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            # The real client is at index (len - TRUSTED_PROXY_COUNT).
+            # Clamp to 0 so we never go out of bounds.
+            idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT)
+            ip = hops[idx]
+            if ip:
+                return ip
+    return request.client.host if request.client else "unknown"
+
+
 # ── In-Memory Rate Limiter ────────────────────────────────────
 # Simple sliding-window rate limiter. For production at scale,
 # replace with Redis-backed solution (e.g., slowapi + redis).
@@ -113,7 +141,7 @@ async def rate_limit_middleware(request: Request, call_next):
     """Apply per-IP rate limiting to scan endpoints."""
     # Only rate-limit the scan endpoint, not health checks
     if request.url.path.endswith("/scan"):
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_client_ip(request)
         if not rate_limiter.is_allowed(client_ip):
             retry_after = rate_limiter.retry_after(client_ip)
             logger.warning("Rate limit exceeded for %s", client_ip)

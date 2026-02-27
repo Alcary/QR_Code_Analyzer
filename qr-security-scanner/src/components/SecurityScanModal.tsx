@@ -67,7 +67,11 @@ export default function SecurityScanModal({
       } catch (error) {
         if (!isMounted) return;
         setStatus("suspicious");
-        setMessage("Analysis failed. Be careful.");
+        setMessage(
+          error instanceof Error && error.message
+            ? error.message
+            : "Analysis failed. Be careful.",
+        );
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
     };

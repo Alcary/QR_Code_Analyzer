@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     # Requests per minute per IP address.
     RATE_LIMIT_PER_MINUTE: int = 30
 
+    # ── Reverse Proxy ──────────────────────────────────────
+    # How many trusted reverse proxy hops sit in front of this server.
+    #   0 = no proxy — use the raw TCP peer address (request.client.host).
+    #   1 = one proxy (nginx / caddy / ALB) that appends to X-Forwarded-For.
+    #   N = N proxies — strip N entries from the right of X-Forwarded-For.
+    #
+    # WARNING: setting this > 0 without an actual trusted proxy in front
+    # lets clients forge X-Forwarded-For and spoof their IP, bypassing
+    # rate limiting entirely. Only enable when a proxy is confirmed present.
+    TRUSTED_PROXY_COUNT: int = 0
+
     # ── Input Validation ──────────────────────────────────────
     MAX_URL_LENGTH: int = 2048
     ALLOWED_SCHEMES: list[str] = ["http", "https"]
