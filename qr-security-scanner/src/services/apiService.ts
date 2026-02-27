@@ -148,11 +148,13 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
 
       // Non-retryable HTTP errors
       if (response.status === 401 || response.status === 403) {
-        return {
-          status: "suspicious",
-          message: "Authentication error with security server.",
-          risk_score: 0,
-        };
+        // Throw so the caller's error handler shows a config error message,
+        // not a misleading scan verdict with status='suspicious'.
+        throw new Error(
+          response.status === 401
+            ? "Server requires an API key. Set apiKey in app.json extra."
+            : "Invalid API key. Check apiKey in app.json extra.",
+        );
       }
 
       if (response.status === 422) {
