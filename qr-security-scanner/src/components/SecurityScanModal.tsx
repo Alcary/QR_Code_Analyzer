@@ -18,6 +18,12 @@ import {
   type ScanResult,
   type ScanDetails,
 } from "../services/apiService";
+import {
+  addToHistory,
+  generateId,
+  loadHistoryEnabled,
+  type HistoryItem,
+} from "../storage/historyStore";
 import ScanResultView from "./ScanResultView";
 
 interface SecurityScanModalProps {
@@ -58,6 +64,26 @@ export default function SecurityScanModal({
         setMessage(result.message);
         setRiskScore(result.risk_score ?? 0);
         setDetails(result.details ?? null);
+
+        // ── Persist to history (fire-and-forget) ────────────────────
+        loadHistoryEnabled()
+          .then((enabled) => {
+            if (!enabled) return;
+            const item: HistoryItem = {
+              id: generateId(),
+              createdAt: new Date().toISOString(),
+              rawPayload: url,
+              normalizedUrl:
+                result.details?.network?.final_url ??
+                (url.startsWith("http") ? url : `https://${url}`),
+              result,
+            };
+            return addToHistory(item);
+          })
+          .catch(() => {
+            // Storage errors must never interrupt the scan flow.
+          });
+        // ────────────────────────────────────────────────────────────
 
         if (result.status === "safe") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
