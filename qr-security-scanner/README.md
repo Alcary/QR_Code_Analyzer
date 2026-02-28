@@ -9,6 +9,7 @@ A mobile application that scans QR codes and sends URLs to the server for furthe
 - **Security Warnings** - Receive instant alerts before accessing unsafe links
 - **Risk Assessment** - Visual risk scoring with detailed threat explanations
 - **Image Fallback** - Scan QR codes from saved images when camera access isn't available
+- **History** - Possibility to store locally past scans
 
 ## How It Works
 
