@@ -17,6 +17,20 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" />
+        <Stack.Screen
+          name="history"
+          options={{
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: "#F5F5F7" },
+          }}
+        />
+        <Stack.Screen
+          name="history-detail"
+          options={{
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: "#F5F5F7" },
+          }}
+        />
       </Stack>
     </ErrorBoundary>
   );

@@ -1,6 +1,16 @@
 import React, { useState } from "react";
-import { View, StyleSheet, StatusBar, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  StatusBar,
+  ActivityIndicator,
+  TouchableOpacity,
+} from "react-native";
 import { CameraView } from "expo-camera";
+import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 
 // Hooks
 import { useCameraPermissions } from "../src/hooks/useCameraPermissions";
@@ -19,6 +29,7 @@ import SecurityScanModal from "../src/components/SecurityScanModal";
 // Constants & Utils
 import { scannerColors as colors } from "../src/constants/theme";
 import { detectPayloadType } from "../src/utils/validation";
+import { SCREEN_WIDTH } from "../src/constants/layout";
 
 /**
  * Single-state machine that replaces three independent booleans.
@@ -35,6 +46,7 @@ type AppState =
   | "analyzing";
 
 export default function QRCodeScanner() {
+  const router = useRouter();
   const { hasPermission, requestPermission } = useCameraPermissions();
   const {
     scanned,
@@ -116,6 +128,29 @@ export default function QRCodeScanner() {
         <ScannerOverlay isScanned={scanned} />
       </View>
 
+      {/* Top bar: title centred, history button right-aligned on the same row */}
+      <View style={styles.topBar} pointerEvents="box-none">
+        {/* Spacer matches button width so the title is truly centred */}
+        <View style={styles.topBarSpacer} />
+        <Text style={styles.appName} pointerEvents="none">
+          QR Security Check
+        </Text>
+        <TouchableOpacity
+          style={styles.historyButton}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push("/history");
+          }}
+          activeOpacity={0.75}
+        >
+          <Ionicons
+            name="time-outline"
+            size={SCREEN_WIDTH * 0.07}
+            color={colors.white}
+          />
+        </TouchableOpacity>
+      </View>
+
       <ResultChip
         data={scanned ? scannedData : null}
         onPress={handleChipPress}
@@ -164,6 +199,38 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.black,
+  },
+  topBar: {
+    position: "absolute",
+    top: StatusBar.currentHeight ? StatusBar.currentHeight + 8 : 50,
+    left: 16,
+    right: 16,
+    zIndex: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  topBarSpacer: {
+    width: SCREEN_WIDTH * 0.15,
+  },
+  appName: {
+    flex: 1,
+    color: colors.white,
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  historyButton: {
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 30,
+    width: SCREEN_WIDTH * 0.15,
+    height: SCREEN_WIDTH * 0.15,
+    justifyContent: "center",
+    alignItems: "center",
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
