@@ -237,7 +237,10 @@ class URLAnalyzer:
                 "medium",
                 evidence=str(net.ssl.cert_age_days),
             ))
-        if not net.ssl.valid and net.ssl.error not in ("ssl_connection_failed", "ssl_verification_failed"):
+        if (
+            net.ssl.valid is False
+            and net.ssl.error not in ("ssl_connection_failed", "ssl_verification_failed", "not_applicable")
+        ):
             risk += 0.05
 
         # HTTP
@@ -344,14 +347,19 @@ class URLAnalyzer:
         if net.http.error in ("ssrf_blocked", "ssrf_check_failed"):
             return "danger", "SSRF attempt blocked — URL targets internal network"
 
-        # Hard override: actual server error (5xx range only)
+        # Availability issue: actual server error (5xx range only)
         # Non-standard codes like 999 (LinkedIn anti-bot) are not server errors
         if net.http.status_code and 500 <= net.http.status_code < 600:
-            return "danger", f"Server error ({net.http.status_code})"
+            return "suspicious", (
+                f"Site returned a server error ({net.http.status_code}); "
+                "security verdict may be incomplete"
+            )
 
-        # Combined failure: unreachable + DNS failed
-        if net.http.error in ("site_unreachable", "timeout") and not net.dns.resolved:
-            return "danger", "Site is unreachable and DNS failed"
+        # Availability issue: the site could not be reached in time
+        if net.http.error in ("site_unreachable", "timeout"):
+            if net.dns.resolved:
+                return "suspicious", "Site is currently unreachable; security verdict may be incomplete"
+            return "suspicious", "Site is unreachable and DNS could not be confirmed"
 
         # Score-based
         if final_score >= self.DANGER_THRESHOLD:

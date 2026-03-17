@@ -40,13 +40,13 @@ export const useImageScanner = (
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
             Alert.alert('No QR Code Found', 'No QR code was detected in the selected image.');
           }
-        } catch (scanError) {
+        } catch {
           setIsScanningImage(false);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
           Alert.alert('Scan Error', 'Could not scan the image.');
         }
       }
-    } catch (error) {
+    } catch {
       setIsScanningImage(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'An error occurred while accessing the gallery.');

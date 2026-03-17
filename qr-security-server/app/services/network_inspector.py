@@ -96,7 +96,7 @@ class DNSResult:
 
 @dataclass
 class SSLResult:
-    valid: bool = False
+    valid: bool | None = None
     issuer: str | None = None
     days_until_expiry: int | None = None
     cert_age_days: int | None = None
@@ -148,9 +148,17 @@ class NetworkInspector:
         self, url: str, domain: str, registered_domain: str
     ) -> NetworkResult:
         """Run DNS, SSL, HTTP, and WHOIS inspections in parallel."""
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        scheme = parsed.scheme.lower()
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            parsed_port = None
+        ssl_port = parsed_port or 443
+
         tasks = [
             self._check_dns(domain, registered_domain),
-            self._check_ssl(domain),
+            self._check_ssl(domain, ssl_port) if scheme == "https" else self._skip_ssl(),
             self._check_http(url, registered_domain),
             self._check_whois(registered_domain),
         ]
@@ -162,6 +170,9 @@ class NetworkInspector:
         net.http = results[2] if isinstance(results[2], HTTPResult) else HTTPResult(error=str(results[2]))
         net.whois = results[3] if isinstance(results[3], WHOISResult) else WHOISResult(error=str(results[3]))
         return net
+
+    async def _skip_ssl(self) -> SSLResult:
+        return SSLResult(valid=None, error="not_applicable")
 
     # ── DNS ────────────────────────────────────────────────────
 
@@ -234,7 +245,7 @@ class NetworkInspector:
 
     # ── SSL ────────────────────────────────────────────────────
 
-    async def _check_ssl(self, domain: str) -> SSLResult:
+    async def _check_ssl(self, domain: str, port: int = 443) -> SSLResult:
         """SSL certificate analysis — validity, age, issuer, expiry."""
         result = SSLResult()
         loop = asyncio.get_running_loop()
@@ -243,7 +254,7 @@ class NetworkInspector:
             ctx = ssl.create_default_context()
             with ctx.wrap_socket(socket.socket(), server_hostname=domain) as conn:
                 conn.settimeout(5)
-                conn.connect((domain, 443))
+                conn.connect((domain, port))
                 return conn.getpeercert()
 
         try:

@@ -5,6 +5,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { scannerColors as colors } from '../constants/theme'; // Ensure path is correct
 import { SCREEN_WIDTH, SCREEN_HEIGHT } from '../constants/layout';
+import { parseQrPayload } from '../utils/validation';
 
 interface ResultModalProps {
   visible: boolean;
@@ -14,6 +15,8 @@ interface ResultModalProps {
 }
 
 export default function ResultModal({ visible, data, onClose, onScanAnother }: ResultModalProps) {
+  const parsedPayload = parseQrPayload(data);
+
   const handleCopyText = async () => {
     if (data) {
       await Clipboard.setStringAsync(data);
@@ -36,13 +39,30 @@ export default function ResultModal({ visible, data, onClose, onScanAnother }: R
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>This QR code contains plain text and is not a clickable link.</Text>
+            <View style={styles.titleBlock}>
+              <Text style={styles.modalEyebrow}>{parsedPayload.label}</Text>
+              <Text style={styles.modalTitle}>
+                This QR code contains {parsedPayload.label.toLowerCase()} data and is not analyzed for link security.
+              </Text>
+            </View>
             <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
               <Ionicons name="close" size={28} color={colors.textDark} />
             </TouchableOpacity>
           </View>
 
+          {parsedPayload.fields.length > 0 && (
+            <View style={styles.summarySection}>
+              {parsedPayload.fields.map((field) => (
+                <View key={`${field.label}-${field.value}`} style={styles.summaryCard}>
+                  <Text style={styles.summaryLabel}>{field.label}</Text>
+                  <Text style={styles.summaryValue}>{field.value}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
           <ScrollView style={styles.textScrollContainer} showsVerticalScrollIndicator={true}>
+            <Text style={styles.rawTitle}>Raw QR Content</Text>
             <Text style={styles.fullText} selectable={true}>
               {data}
             </Text>
@@ -85,20 +105,68 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
-  modalTitle: {
+  titleBlock: {
     flex: 1,
-    fontSize: SCREEN_WIDTH * 0.05,
+    paddingRight: 12,
+  },
+  modalEyebrow: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  modalTitle: {
+    fontSize: SCREEN_WIDTH * 0.048,
     fontWeight: 'bold',
     color: colors.textDark,
+    lineHeight: SCREEN_WIDTH * 0.065,
   },
   modalCloseButton: {
-    padding: 5,
-    marginLeft: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
+  summarySection: {
+    paddingHorizontal: SCREEN_WIDTH * 0.05,
+    paddingTop: SCREEN_HEIGHT * 0.02,
+    gap: 10,
+  },
+  summaryCard: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  summaryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  summaryValue: {
+    fontSize: SCREEN_WIDTH * 0.04,
+    color: colors.textDark,
+    fontWeight: '600',
   },
   textScrollContainer: {
     maxHeight: SCREEN_HEIGHT * 0.5,
     paddingHorizontal: SCREEN_WIDTH * 0.05,
     paddingVertical: SCREEN_HEIGHT * 0.025,
+  },
+  rawTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
   },
   fullText: {
     fontSize: SCREEN_WIDTH * 0.04,
