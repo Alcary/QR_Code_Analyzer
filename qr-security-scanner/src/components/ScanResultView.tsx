@@ -121,8 +121,14 @@ export default function ScanResultView({
             <NetworkBadge
               icon="lock-closed-outline"
               label="SSL"
-              value={network.ssl_valid ? "Valid" : "Invalid"}
-              ok={network.ssl_valid ?? false}
+              value={
+                network.ssl_valid == null
+                  ? "N/A"
+                  : network.ssl_valid
+                    ? "Valid"
+                    : "Invalid"
+              }
+              ok={network.ssl_valid}
             />
             <NetworkBadge
               icon="swap-horizontal-outline"

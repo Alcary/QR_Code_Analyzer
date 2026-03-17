@@ -227,8 +227,6 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
 
   const isTimeout =
     lastError instanceof DOMException && lastError.name === "AbortError";
-  const isServerError =
-    lastError instanceof Error && lastError.message.startsWith("Server error:");
 
   return {
     status: "suspicious" as const,

@@ -24,6 +24,7 @@ import {
   loadHistoryEnabled,
   type HistoryItem,
 } from "../storage/historyStore";
+import { normalizeWebUrl } from "../utils/validation";
 import ScanResultView from "./ScanResultView";
 
 interface SecurityScanModalProps {
@@ -37,6 +38,7 @@ export default function SecurityScanModal({
   url,
   onClose,
 }: SecurityScanModalProps) {
+  const normalizedUrl = normalizeWebUrl(url) ?? url;
   const [status, setStatus] = useState<
     "analyzing" | "safe" | "danger" | "suspicious"
   >("analyzing");
@@ -74,8 +76,7 @@ export default function SecurityScanModal({
               createdAt: new Date().toISOString(),
               rawPayload: url,
               normalizedUrl:
-                result.details?.network?.final_url ??
-                (url.startsWith("http") ? url : `https://${url}`),
+                result.details?.network?.final_url ?? normalizedUrl ?? undefined,
               result,
             };
             return addToHistory(item);
@@ -107,14 +108,14 @@ export default function SecurityScanModal({
     return () => {
       isMounted = false;
     };
-  }, [visible, url]);
+  }, [normalizedUrl, visible, url]);
 
   const handleOpenLink = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (url) {
-      const supported = await Linking.canOpenURL(url);
+    if (normalizedUrl) {
+      const supported = await Linking.canOpenURL(normalizedUrl);
       if (supported) {
-        await Linking.openURL(url);
+        await Linking.openURL(normalizedUrl);
       }
     }
     onClose();

@@ -7,7 +7,7 @@ interface NetworkBadgeProps {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value: string;
-  ok: boolean;
+  ok: boolean | null | undefined;
 }
 
 export default function NetworkBadge({
@@ -16,27 +16,28 @@ export default function NetworkBadge({
   value,
   ok,
 }: NetworkBadgeProps) {
+  const isNeutral = ok == null;
+  const borderColor = isNeutral
+    ? `${colors.textSecondary}30`
+    : ok
+      ? `${colors.success}40`
+      : `${colors.error}40`;
+  const accentColor = isNeutral
+    ? colors.textSecondary
+    : ok
+      ? colors.success
+      : colors.error;
+
   return (
     <View
       style={[
         styles.badge,
-        { borderColor: ok ? `${colors.success}40` : `${colors.error}40` },
+        { borderColor },
       ]}
     >
-      <Ionicons
-        name={icon}
-        size={16}
-        color={ok ? colors.success : colors.error}
-      />
+      <Ionicons name={icon} size={16} color={accentColor} />
       <Text style={styles.badgeLabel}>{label}</Text>
-      <Text
-        style={[
-          styles.badgeValue,
-          { color: ok ? colors.success : colors.error },
-        ]}
-      >
-        {value}
-      </Text>
+      <Text style={[styles.badgeValue, { color: accentColor }]}>{value}</Text>
     </View>
   );
 }

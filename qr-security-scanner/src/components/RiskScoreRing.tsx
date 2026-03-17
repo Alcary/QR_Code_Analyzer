@@ -9,13 +9,14 @@ interface RiskScoreRingProps {
   /** Ring diameter */
   size?: number;
   /** Status from server */
-  status?: 'safe' | 'suspicious' | 'danger';
+  status?: 'safe' | 'suspicious' | 'danger' | 'info';
 }
 
 function getColor(status?: string, score?: number): string {
   if (status === 'safe') return colors.success;
   if (status === 'danger') return colors.error;
   if (status === 'suspicious') return colors.warning;
+  if (status === 'info') return colors.primary;
   if (score !== undefined) {
     if (score < 0.30) return colors.success;
     if (score < 0.60) return colors.warning;
@@ -25,6 +26,7 @@ function getColor(status?: string, score?: number): string {
 }
 
 function getIcon(status?: string, score?: number): keyof typeof Ionicons.glyphMap {
+  if (status === 'info') return 'information-circle';
   if (status === 'safe' || (score !== undefined && score < 0.30)) return 'shield-checkmark';
   if (status === 'danger' || (score !== undefined && score >= 0.60)) return 'alert-circle';
   return 'warning';
@@ -34,6 +36,7 @@ function getLabel(status?: string, score?: number): string {
   if (status === 'safe') return 'Safe';
   if (status === 'suspicious') return 'Suspicious';
   if (status === 'danger') return 'Threat Detected';
+  if (status === 'info') return 'Not Analyzed';
   if (score !== undefined) {
     if (score < 0.30) return 'Safe';
     if (score < 0.60) return 'Suspicious';
