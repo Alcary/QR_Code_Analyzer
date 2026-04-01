@@ -1,0 +1,41 @@
+services:
+  # ── API Server ──────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=dev
+      - BROWSER_SERVICE_URL=http://browser:3000
+      - BROWSER_ANALYSIS_ENABLED=true
+    depends_on:
+      browser:
+        condition: service_healthy
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+
+  # ── Browser Analysis Service ────────────────────────────────
+  browser:
+    build:
+      context: ./browser-service
+      dockerfile: Dockerfile
+    environment:
+      - PAGE_TIMEOUT_MS=12000
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # No ports exposed to host — only accessible within Docker network
+    restart: unless-stopped
+    # Security: limit resources to prevent abuse
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"

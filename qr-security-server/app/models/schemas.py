@@ -80,6 +80,30 @@ class DomainDetails(BaseModel):
     registrar: str | None = None
 
 
+class BrowserDetails(BaseModel):
+    """Features extracted by the containerized browser analysis."""
+    has_login_form: bool = False
+    has_credit_card_input: bool = False
+    has_ssn_input: bool = False
+    external_form_action: bool = False
+    total_script_count: int = 0
+    external_script_domains: int = 0
+    has_js_obfuscation: bool = False
+    disables_right_click: bool = False
+    iframe_count: int = 0
+    external_iframe_count: int = 0
+    brand_domain_mismatch: bool = False
+    impersonated_brand: str | None = None
+    has_urgency_text: bool = False
+    has_threat_text: bool = False
+    page_title: str = ""
+    total_requests: int = 0
+    external_domain_count: int = 0
+    domain_changed: bool = False
+    final_url: str | None = None
+    page_load_ms: int = 0
+
+
 class NetworkDetails(BaseModel):
     dns_resolved: bool | None = None
     dns_ttl: int | None = None
@@ -98,6 +122,7 @@ class ScanDetails(BaseModel):
     ml: MLDetails | None = None
     domain: DomainDetails | None = None
     network: NetworkDetails | None = None
+    browser: BrowserDetails | None = None
     risk_factors: list[RiskFactor] = Field(default_factory=list)
     analysis_time_ms: int | None = None
 

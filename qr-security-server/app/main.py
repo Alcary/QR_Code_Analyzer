@@ -122,7 +122,28 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("API key authentication: DISABLED (set API_KEY env var for production)")
     logger.info("Rate limit: %d req/min per IP", settings.RATE_LIMIT_PER_MINUTE)
+
+    # ── Browser Analysis Container ────────────────────────────
+    if settings.BROWSER_ANALYSIS_ENABLED:
+        from app.services.browser_analyzer import container_manager
+        browser_ok = await container_manager.start()
+        if browser_ok:
+            logger.info("Browser analysis: ENABLED (container running)")
+        else:
+            logger.warning(
+                "Browser analysis: DEGRADED — container could not be started. "
+                "Install Docker and docker-py, or set BROWSER_ANALYSIS_ENABLED=false. "
+                "The server will continue without browser analysis."
+            )
+    else:
+        logger.info("Browser analysis: DISABLED (BROWSER_ANALYSIS_ENABLED=false)")
+
     yield
+
+    # ── Shutdown ──────────────────────────────────────────────
+    if settings.BROWSER_ANALYSIS_ENABLED:
+        from app.services.browser_analyzer import container_manager
+        await container_manager.stop()
     logger.info("Shutting down")
 
 
