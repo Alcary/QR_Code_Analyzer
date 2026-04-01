@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     NETWORK_TIMEOUT: float = 8.0
     WHOIS_TIMEOUT: float = 5.0
 
+    # ── Browser Analysis Service ─────────────────────────────
+    BROWSER_SERVICE_URL: str = "http://localhost:3000"
+    BROWSER_TIMEOUT: float = 15.0
+    BROWSER_ANALYSIS_ENABLED: bool = True
+    BROWSER_PAGE_TIMEOUT_MS: int = 12000
+
     # ── Cache ─────────────────────────────────────────────────
     CACHE_MAX_SIZE: int = 2000
     CACHE_TTL: int = 3600  # 1 hour

@@ -1,16 +1,20 @@
 """
-URL Analyzer — Multi-Layer Orchestrator (v3)
+URL Analyzer — Multi-Layer Orchestrator (v4)
 
 Analysis pipeline:
 1. Input validation & URL normalization
 2. Cache check (TTL-based)
 3. ML prediction (XGBoost on 95 URL features)
-4. Parallel network checks (DNS, SSL, HTTP, WHOIS)
-5. Computed domain trust score (replaces static whitelist dampening)
-6. Heuristic risk factors (URL-derived + network-derived)
-7. Risk score computation combining all three signal layers
-8. SHAP feature-attribution explanations
-9. Final verdict: safe / suspicious / danger
+4. SSRF pre-check (security gate — blocks private/reserved IPs)
+5. Browser analysis (primary) OR full network checks (fallback):
+   - Browser OK  → DNS/SSL/WHOIS only (browser handles content)
+   - Browser FAIL → DNS/SSL/HTTP/WHOIS (HTTP includes static content inspection)
+6. Computed domain trust score
+7. Network risk signals
+8. Browser risk signals (when available)
+9. Heuristic risk factors (URL-derived + network + browser)
+10. Risk score computation combining all signal layers
+11. Final verdict: safe / suspicious / danger
 
 """
 
@@ -21,6 +25,7 @@ from urllib.parse import urlparse
 
 from cachetools import TTLCache
 
+from app.core.config import settings
 from app.services.ml.predictor import predictor
 from app.services.url_features import get_risk_factors
 from app.services.domain_reputation import (
@@ -32,6 +37,7 @@ from app.services.domain_reputation import (
     KNOWN_SHORTENERS,
 )
 from app.services.network_inspector import network_inspector
+from app.services.browser_analyzer import browser_analyzer, BrowserResult
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +107,45 @@ class URLAnalyzer:
             explanation = None
             logger.warning("ML model not loaded or failed, using fallback score")
 
-        # ── 4. Network Checks (parallel) ──
-        net = await network_inspector.inspect_all(url, hostname, registered_domain)
+        # ── 4. SSRF Pre-Check (security gate — always runs) ──
+        from app.services.network_inspector import _is_private_or_reserved, NetworkResult
+        try:
+            initial_host = urlparse(url if "://" in url else f"https://{url}").hostname or ""
+            is_private = await loop.run_in_executor(
+                None, _is_private_or_reserved, initial_host
+            )
+            if is_private:
+                logger.warning("SSRF blocked: %s resolves to private/reserved IP", initial_host)
+                return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
+        except Exception as exc:
+            logger.warning("SSRF pre-check failed for %s: %s", url, exc)
+            return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
 
-        # ── 5. Computed Domain Trust (replaces static whitelist) ──
+        # ── 5. Browser Analysis (primary) + Network Checks (DNS/SSL/WHOIS always, HTTP as fallback) ──
+        # Strategy:
+        #   - DNS, SSL, WHOIS always run (independent signals)
+        #   - Browser analysis is attempted first for content inspection
+        #   - If browser fails, full HTTP check runs as fallback (includes static content inspection)
+        #   - If browser succeeds, HTTP check is skipped (browser covers it better)
+
+        browser_result = BrowserResult()
+        if settings.BROWSER_ANALYSIS_ENABLED:
+            try:
+                browser_result = await browser_analyzer.analyze(url)
+            except Exception as e:
+                logger.error("Browser analysis raised: %s", e)
+
+        if browser_result.success:
+            # Browser succeeded — run only DNS/SSL/WHOIS (skip HTTP, browser covered it)
+            net = await network_inspector.inspect_without_http(url, hostname, registered_domain)
+            logger.info("Browser analysis succeeded — using browser for content, skipped HTTP check")
+        else:
+            # Browser failed — run full network checks including HTTP as fallback
+            net = await network_inspector.inspect_all(url, hostname, registered_domain)
+            if settings.BROWSER_ANALYSIS_ENABLED:
+                logger.warning("Browser analysis failed — falling back to static HTTP content inspection")
+
+        # ── 6. Computed Domain Trust (replaces static whitelist) ──
         reputation = compute_domain_trust(
             hostname=hostname,
             url_path=path,
@@ -126,26 +167,45 @@ class URLAnalyzer:
             reputation.tier.value, registered_domain,
         )
 
-        # ── 6. Network Risk Signals ──
-        network_risk, network_factors = self._compute_network_risk(net, reputation.tier, registered_domain)
+        # ── 7. Network Risk Signals ──
+        network_risk, network_factors = self._compute_network_risk(
+            net, reputation.tier, registered_domain, browser_result.success
+        )
 
-        # ── 7. Heuristic Risk Factors ──
+        # ── 8. Browser Risk Signals ──
+        browser_risk = 0.0
+        browser_factors: list[dict] = []
+        if browser_result.success:
+            browser_risk, browser_factors = browser_analyzer.compute_risk_signals(browser_result)
+            logger.info("Browser analysis: risk=%.3f, factors=%d", browser_risk, len(browser_factors))
+
+        # ── 9. Heuristic Risk Factors ──
         risk_factors = get_risk_factors(url)
         risk_factors.extend(network_factors)
+        risk_factors.extend(browser_factors)
         heuristic_risk = self._compute_heuristic_risk(risk_factors)
 
-        # ── 8. Final Score ──
-        # Three signals, each capturing different risk dimensions:
+        # ── 10. Final Score ──
+        # Four signals, each capturing different risk dimensions:
         #   - dampened_ml    : ML model score adjusted by domain trust
         #   - network_risk   : observable network anomalies (SSL, DNS, HTTP, WHOIS)
+        #   - browser_risk   : page-level signals from rendered content
         #   - heuristic_risk : URL-derived risk factors (keywords, structure)
         #
-        # The heuristic component ensures risk factors displayed in the
-        # UI actually influence the final risk percentage.
-        final_score = 0.55 * dampened_ml + 0.25 * network_risk + 0.20 * heuristic_risk
+        # When browser analysis is unavailable, fall back to the original
+        # three-signal weights so the system degrades gracefully.
+        if browser_result.success:
+            final_score = (
+                0.40 * dampened_ml
+                + 0.20 * network_risk
+                + 0.25 * browser_risk
+                + 0.15 * heuristic_risk
+            )
+        else:
+            final_score = 0.55 * dampened_ml + 0.25 * network_risk + 0.20 * heuristic_risk
         final_score = max(0.0, min(1.0, final_score))
 
-        # ── 9. Hard overrides & verdict ──
+        # ── 11. Hard overrides & verdict ──
         status, message = self._decide(
             final_score=final_score,
             net=net,
@@ -188,6 +248,7 @@ class URLAnalyzer:
                     "final_url": net.http.final_url,
                     "content_flags": net.http.content_flags,
                 },
+                "browser": self._format_browser_details(browser_result),
                 "risk_factors": risk_factors if risk_factors else [],
                 "analysis_time_ms": elapsed_ms,
             },
@@ -200,10 +261,16 @@ class URLAnalyzer:
     # Network Risk Scoring
     # ──────────────────────────────────────────────────────────
 
-    def _compute_network_risk(self, net, tier: ReputationTier, registered_domain: str = "") -> tuple[float, list[dict]]:
+    def _compute_network_risk(
+        self, net, tier: ReputationTier, registered_domain: str = "", browser_succeeded: bool = False,
+    ) -> tuple[float, list[dict]]:
         """
         Compute a 0.0–1.0 risk score from network signals.
         Returns (score, list_of_risk_factor_dicts).
+
+        When browser_succeeded is True, content_flags from the static HTTP
+        check are ignored (the browser provides richer content analysis).
+        When False, content_flags are scored as a fallback.
         """
         risk = 0.0
         factors: list[dict] = []
@@ -260,19 +327,21 @@ class URLAnalyzer:
             risk += 0.08
             factors.append(_rf("no_https", "No HTTPS encryption", "medium"))
 
-        _content_map = {
-            "password_field":      (0.10, "page_password_field",   "Page contains password field",        "high"),
-            "billing_info_request":(0.15, "page_billing_info",     "Page requests billing information",   "high"),
-            "sensitive_id_request":(0.15, "page_sensitive_id",     "Page requests sensitive ID",          "high"),
-            "geolocation_tracking":(0.10, "page_geolocation",      "Page tracks geolocation",             "medium"),
-            "obfuscated_javascript":(0.15,"page_obfuscated_js",    "Obfuscated JavaScript detected",      "high"),
-            "excessive_iframes":   (0.10, "page_excessive_iframes","Excessive iframes (click-jacking risk)","medium"),
-        }
-        for flag in net.http.content_flags:
-            if flag in _content_map:
-                weight, code, message, severity = _content_map[flag]
-                risk += weight
-                factors.append(_rf(code, message, severity))
+        # Content flags — only scored in fallback mode (browser unavailable)
+        if not browser_succeeded:
+            _content_map = {
+                "password_field":       (0.10, "page_password_field",    "Page contains password field",          "high"),
+                "billing_info_request": (0.15, "page_billing_info",      "Page requests billing information",     "high"),
+                "sensitive_id_request": (0.15, "page_sensitive_id",      "Page requests sensitive ID",            "high"),
+                "geolocation_tracking": (0.10, "page_geolocation",       "Page tracks geolocation",               "medium"),
+                "obfuscated_javascript":(0.15, "page_obfuscated_js",     "Obfuscated JavaScript detected",        "high"),
+                "excessive_iframes":    (0.10, "page_excessive_iframes", "Excessive iframes (click-jacking risk)","medium"),
+            }
+            for flag in net.http.content_flags:
+                if flag in _content_map:
+                    weight, code, message, severity = _content_map[flag]
+                    risk += weight
+                    factors.append(_rf(code, message, severity))
 
         # WHOIS
         if net.whois.is_new_domain:
@@ -325,6 +394,41 @@ class URLAnalyzer:
         if explanation is None:
             return None
         return explanation.get("contributions", [])
+
+    # ──────────────────────────────────────────────────────────
+    # Browser Details Formatting
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _format_browser_details(br: BrowserResult) -> dict | None:
+        """Format browser analysis result for the API response."""
+        if not br.success:
+            return None
+        return {
+            "has_login_form": br.has_login_form,
+            "has_credit_card_input": br.has_credit_card_input,
+            "has_ssn_input": br.has_ssn_input,
+            "external_form_action": br.external_form_action,
+            "total_script_count": br.total_script_count,
+            "external_script_domains": br.external_script_domains,
+            "has_js_obfuscation": (
+                br.has_eval_usage or br.has_atob_eval
+                or br.has_document_write or br.has_fromcharcode
+            ),
+            "disables_right_click": br.disables_right_click,
+            "iframe_count": br.iframe_count,
+            "external_iframe_count": br.external_iframe_count,
+            "brand_domain_mismatch": br.brand_domain_mismatch,
+            "impersonated_brand": br.impersonated_brand,
+            "has_urgency_text": br.has_urgency_text,
+            "has_threat_text": br.has_threat_text,
+            "page_title": br.page_title,
+            "total_requests": br.total_requests,
+            "external_domain_count": br.external_domain_count,
+            "domain_changed": br.domain_changed,
+            "final_url": br.final_url,
+            "page_load_ms": br.page_load_ms,
+        }
 
     # ──────────────────────────────────────────────────────────
     # Decision Logic

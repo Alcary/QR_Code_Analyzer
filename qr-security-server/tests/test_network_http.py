@@ -193,7 +193,7 @@ async def test_ssrf_blocked_on_redirect_hop():
 
 @pytest.mark.asyncio
 async def test_content_flag_password_field():
-    """HTML body containing a password field is detected and flagged."""
+    """HTML body containing a password field is detected (used as fallback when browser is down)."""
     inspector = NetworkInspector()
     body = b'<html><form><input type="password" name="password"></form></html>'
     resp = _FakeResponse(200, {"Content-Type": "text/html; charset=utf-8"}, body)

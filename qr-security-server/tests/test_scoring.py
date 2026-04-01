@@ -148,10 +148,24 @@ def test_network_risk_shortener_suppresses_cross_domain_redirect():
     assert not any(f["code"] == "cross_domain_redirect" for f in factors)
 
 
-def test_network_risk_content_flags():
+def test_network_risk_content_flags_skipped_when_browser_succeeded():
+    """When browser analysis succeeded, content_flags are not scored (browser covers it)."""
     net = _clean_net()
     net.http.content_flags = ["password_field", "obfuscated_javascript"]
-    risk, factors = _analyzer._compute_network_risk(net, ReputationTier.NEUTRAL)
+    risk, factors = _analyzer._compute_network_risk(
+        net, ReputationTier.NEUTRAL, browser_succeeded=True
+    )
+    assert risk == pytest.approx(0.0)
+    assert factors == []
+
+
+def test_network_risk_content_flags_scored_in_fallback():
+    """When browser analysis failed, content_flags are scored as fallback."""
+    net = _clean_net()
+    net.http.content_flags = ["password_field", "obfuscated_javascript"]
+    risk, factors = _analyzer._compute_network_risk(
+        net, ReputationTier.NEUTRAL, browser_succeeded=False
+    )
     codes = [f["code"] for f in factors]
     assert "page_password_field" in codes
     assert "page_obfuscated_js" in codes
@@ -171,7 +185,7 @@ def test_network_risk_capped_at_one():
         ),
         whois=WHOISResult(is_new_domain=True, age_days=2),
     )
-    risk, _ = _analyzer._compute_network_risk(net, ReputationTier.NEUTRAL)
+    risk, _ = _analyzer._compute_network_risk(net, ReputationTier.NEUTRAL, browser_succeeded=False)
     assert 0.0 <= risk <= 1.0
 
 

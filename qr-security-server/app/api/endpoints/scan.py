@@ -9,6 +9,7 @@ from app.models.schemas import (
     MLDetails,
     DomainDetails,
     NetworkDetails,
+    BrowserDetails,
 )
 from app.core.security import verify_api_key
 from app.services.analyzer import analyzer
@@ -33,6 +34,7 @@ async def scan_url(request: ScanRequest):
             ml=MLDetails(**raw["ml"]) if raw.get("ml") else None,
             domain=DomainDetails(**raw["domain"]) if raw.get("domain") else None,
             network=NetworkDetails(**raw["network"]) if raw.get("network") else None,
+            browser=BrowserDetails(**raw["browser"]) if raw.get("browser") else None,
             risk_factors=raw.get("risk_factors", []),
             analysis_time_ms=raw.get("analysis_time_ms"),
         )

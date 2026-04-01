@@ -171,6 +171,38 @@ class NetworkInspector:
         net.whois = results[3] if isinstance(results[3], WHOISResult) else WHOISResult(error=str(results[3]))
         return net
 
+    async def inspect_without_http(
+        self, url: str, domain: str, registered_domain: str
+    ) -> NetworkResult:
+        """
+        Run DNS, SSL, and WHOIS inspections in parallel — skip HTTP.
+
+        Used when the browser analysis service has already rendered the page
+        and extracted content features. DNS/SSL/WHOIS provide independent
+        signals that the browser doesn't cover.
+        """
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        scheme = parsed.scheme.lower()
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            parsed_port = None
+        ssl_port = parsed_port or 443
+
+        tasks = [
+            self._check_dns(domain, registered_domain),
+            self._check_ssl(domain, ssl_port) if scheme == "https" else self._skip_ssl(),
+            self._check_whois(registered_domain),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        net = NetworkResult()
+        net.dns = results[0] if isinstance(results[0], DNSResult) else DNSResult(error=str(results[0]))
+        net.ssl = results[1] if isinstance(results[1], SSLResult) else SSLResult(error=str(results[1]))
+        net.whois = results[2] if isinstance(results[2], WHOISResult) else WHOISResult(error=str(results[2]))
+        # HTTP result left as default (empty) — browser handled content inspection
+        return net
+
     async def _skip_ssl(self) -> SSLResult:
         return SSLResult(valid=None, error="not_applicable")
 
@@ -425,7 +457,10 @@ class NetworkInspector:
                             if final_reg != registered_domain:
                                 result.redirect_domain_mismatch = True
 
-                        # Content inspection — HTML only, body capped at MAX_RESPONSE_BYTES
+                        # Content inspection — static HTML fallback.
+                        # The browser service provides richer analysis of the
+                        # rendered DOM; this static scan serves as a backup
+                        # when the browser container is unavailable.
                         ctype = resp.headers.get("Content-Type", "").lower()
                         if resp.status == 200 and "text/html" in ctype:
                             try:
