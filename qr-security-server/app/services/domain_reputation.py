@@ -342,18 +342,3 @@ def compute_domain_trust(
 
     return ReputationInfo(tier, round(dampening, 4), desc)
 
-
-# ═══════════════════════════════════════════════════════════════
-# Backward-Compatible API (used by analyzer.py before network results)
-# ═══════════════════════════════════════════════════════════════
-
-def get_reputation(url_or_domain: str, url_path: str = "") -> ReputationInfo:
-    """
-    Backward-compatible wrapper.
-
-    Without network signals this returns a structure-only estimate.
-    The full compute_domain_trust() should be called from analyzer.py
-    once network results are available.
-    """
-    hostname = normalize_hostname(url_or_domain)
-    return compute_domain_trust(hostname, url_path=url_path)

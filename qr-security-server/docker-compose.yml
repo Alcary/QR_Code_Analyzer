@@ -1,4 +1,17 @@
 services:
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis_data:/data
+    # No ports exposed to host — only accessible within Docker network
+
   # ── API Server ──────────────────────────────────────────────
   api:
     build:
@@ -10,7 +23,10 @@ services:
       - ENVIRONMENT=dev
       - BROWSER_SERVICE_URL=http://browser:3000
       - BROWSER_ANALYSIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379
     depends_on:
+      redis:
+        condition: service_healthy
       browser:
         condition: service_healthy
     volumes:
@@ -39,3 +55,6 @@ services:
         limits:
           memory: 1G
           cpus: "1.0"
+
+volumes:
+  redis_data:

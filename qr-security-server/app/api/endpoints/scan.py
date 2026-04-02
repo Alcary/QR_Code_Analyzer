@@ -23,7 +23,8 @@ async def scan_url(request: ScanRequest):
     """
     Multi-layer URL security analysis.
 
-    Pipeline: ML ensemble → domain reputation → DNS/SSL/HTTP/WHOIS → verdict.
+    Pipeline: SSRF check → ML → browser render → DNS/SSL/WHOIS → verdict.
+    Browser analysis is primary; DNS/SSL/HTTP/WHOIS runs as fallback when unavailable.
     """
     result = await analyzer.analyze(request.url)
 

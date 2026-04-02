@@ -19,6 +19,7 @@ Analysis pipeline:
 """
 
 import asyncio
+import json
 import logging
 import time
 from urllib.parse import urlparse
@@ -26,6 +27,7 @@ from urllib.parse import urlparse
 from cachetools import TTLCache
 
 from app.core.config import settings
+from app.core.redis_client import get_client as get_redis
 from app.services.ml.predictor import predictor
 from app.services.url_features import get_risk_factors
 from app.services.domain_reputation import (
@@ -53,7 +55,9 @@ class URLAnalyzer:
     SUSPICIOUS_THRESHOLD = 0.40
 
     def __init__(self, cache_maxsize: int = 2000, cache_ttl: int = 3600):
-        self.cache: TTLCache = TTLCache(maxsize=cache_maxsize, ttl=cache_ttl)
+        self._cache_ttl = cache_ttl
+        # In-memory fallback — used when Redis is not available
+        self._local_cache: TTLCache = TTLCache(maxsize=cache_maxsize, ttl=cache_ttl)
 
     # ──────────────────────────────────────────────────────────
     # Public API
@@ -67,9 +71,10 @@ class URLAnalyzer:
         start = time.perf_counter()
 
         # ── 1. Cache ──
-        if url in self.cache:
+        cached = await self._cache_get(url)
+        if cached is not None:
             logger.info("Cache hit: %s", url)
-            return self.cache[url]
+            return cached
 
         # ── 2. Parse ──
         try:
@@ -254,8 +259,35 @@ class URLAnalyzer:
             },
         )
 
-        self.cache[url] = result
+        await self._cache_set(url, result)
         return result
+
+    # ──────────────────────────────────────────────────────────
+    # Cache helpers (Redis primary, in-memory fallback)
+    # ──────────────────────────────────────────────────────────
+
+    async def _cache_get(self, url: str) -> dict | None:
+        redis = get_redis()
+        if redis is not None:
+            try:
+                raw = await redis.get(f"scan:{url}")
+                if raw:
+                    return json.loads(raw)
+            except Exception as e:
+                logger.warning("Redis cache get failed: %s", e)
+        # Fallback to local cache
+        return self._local_cache.get(url)
+
+    async def _cache_set(self, url: str, result: dict) -> None:
+        redis = get_redis()
+        if redis is not None:
+            try:
+                await redis.setex(f"scan:{url}", self._cache_ttl, json.dumps(result))
+                return
+            except Exception as e:
+                logger.warning("Redis cache set failed: %s", e)
+        # Fallback to local cache
+        self._local_cache[url] = result
 
     # ──────────────────────────────────────────────────────────
     # Network Risk Scoring

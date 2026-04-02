@@ -121,6 +121,10 @@ class ContainerManager:
             self.host_port = host_port
         # Lock: only one restart attempt at a time
         self._restart_lock = asyncio.Lock()
+        # True when the service was already running before we started
+        # (e.g. managed by docker-compose). In that case we never touch
+        # the Docker SDK and never stop the container on shutdown.
+        self._externally_managed = False
 
     def _get_client(self):
         """Lazy-init Docker client."""
@@ -147,11 +151,25 @@ class ContainerManager:
 
     async def start(self) -> bool:
         """
-        Ensure the browser container is running.
+        Ensure the browser service is reachable.
 
-        Build the image if needed, then start (or restart) the container.
-        Returns True if the container is running after this call.
+        If the service already responds to a health check (e.g. started by
+        docker-compose), mark it as externally managed and return immediately
+        without touching the Docker SDK.
+
+        Otherwise, build the image and start the container via Docker SDK.
+        Returns True if the service is reachable after this call.
         """
+        # Fast path: service is already up (Compose or any external manager).
+        if await self._is_healthy():
+            self._externally_managed = True
+            logger.info(
+                "Browser service already reachable at %s — "
+                "skipping container lifecycle management (externally managed)",
+                settings.BROWSER_SERVICE_URL,
+            )
+            return True
+
         client = self._get_client()
         if client is None:
             logger.warning("Docker not available — browser analysis will use external service or be skipped")
@@ -174,26 +192,35 @@ class ContainerManager:
         except Exception:
             pass  # Container doesn't exist yet
 
-        # Build image
-        build_dir = self._find_browser_service_dir()
-        if build_dir is None:
-            logger.error("Cannot find browser-service/ directory — skipping container start")
-            return False
-
-        logger.info("Building browser service image from %s ...", build_dir)
+        # Build image only if it does not already exist locally
+        image_exists = False
         try:
-            await loop.run_in_executor(
-                None,
-                lambda: client.images.build(
-                    path=str(build_dir),
-                    tag=IMAGE_NAME,
-                    rm=True,
+            await loop.run_in_executor(None, lambda: client.images.get(IMAGE_NAME))
+            image_exists = True
+            logger.info("Browser image '%s' already exists — skipping build", IMAGE_NAME)
+        except Exception:
+            pass  # ImageNotFound — need to build
+
+        if not image_exists:
+            build_dir = self._find_browser_service_dir()
+            if build_dir is None:
+                logger.error("Cannot find browser-service/ directory — skipping container start")
+                return False
+
+            logger.info("Building browser service image from %s ...", build_dir)
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: client.images.build(
+                        path=str(build_dir),
+                        tag=IMAGE_NAME,
+                        rm=True,
+                    )
                 )
-            )
-            logger.info("Image '%s' built successfully", IMAGE_NAME)
-        except Exception as e:
-            logger.error("Failed to build browser image: %s", e)
-            return False
+                logger.info("Image '%s' built successfully", IMAGE_NAME)
+            except Exception as e:
+                logger.error("Failed to build browser image: %s", e)
+                return False
 
         # Start container
         try:
@@ -230,7 +257,14 @@ class ContainerManager:
         return False
 
     async def stop(self) -> None:
-        """Stop and remove the browser container."""
+        """Stop and remove the browser container.
+
+        No-op when the service is externally managed (e.g. docker-compose).
+        """
+        if self._externally_managed:
+            logger.info("Browser service is externally managed — skipping container stop")
+            return
+
         client = self._get_client()
         if client is None:
             return
@@ -254,15 +288,27 @@ class ContainerManager:
 
     async def ensure_running(self) -> bool:
         """
-        Check if the container is alive; restart it if not.
+        Check if the service is alive; restart it if not.
         Called before each analysis request.
 
-        The restart lock ensures that if multiple requests find the container
-        dead simultaneously, only one of them does the restart work. The
-        others wait and then re-check rather than all trying to rebuild at once.
+        When externally managed (docker-compose), only the health check is
+        performed — the restart logic is skipped because the container
+        manager (Compose restart policy) handles recovery automatically.
+
+        When self-managed, the restart lock ensures that if multiple requests
+        find the container dead simultaneously, only one of them does the
+        restart work. The others wait and re-check rather than all trying to
+        rebuild at once.
         """
         if await self._is_healthy():
             return True
+
+        if self._externally_managed:
+            logger.warning(
+                "Browser service at %s is not responding (externally managed — cannot restart)",
+                settings.BROWSER_SERVICE_URL,
+            )
+            return False
 
         async with self._restart_lock:
             # Re-check inside the lock — another coroutine may have already

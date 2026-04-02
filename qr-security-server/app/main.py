@@ -11,6 +11,7 @@ from app.api.endpoints import scan, health
 from app.api.middleware import RequestLoggingMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+from app.core.redis_client import get_client as get_redis, setup_redis, close_redis
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -35,15 +36,8 @@ def _get_client_ip(request: Request) -> str:
         xff = request.headers.get("X-Forwarded-For", "").strip()
         if xff:
             hops = [h.strip() for h in xff.split(",") if h.strip()]
-            # XFF format: "client, proxy1, proxy2" — rightmost N entries are
-            # the TRUSTED_PROXY_COUNT known proxies.  The real client sits one
-            # position to the left of those proxies, i.e. at index:
-            #   len(hops) - TRUSTED_PROXY_COUNT - 1
-            # Example: hops=[client, proxy1], TRUSTED_PROXY_COUNT=1
-            #   idx = 2 - 1 - 1 = 0  →  hops[0] = client  ✓
             idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT - 1)
             ip = hops[idx]
-            # Strip optional :port suffix (IPv4: "1.2.3.4:5678", not IPv6 brackets)
             if ":" in ip and not ip.startswith("["):
                 ip, _, _ = ip.rpartition(":")
             if ip:
@@ -51,35 +45,84 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-# ── In-Memory Rate Limiter ────────────────────────────────────
-# Simple sliding-window rate limiter. For production at scale,
-# replace with Redis-backed solution (e.g., slowapi + redis).
+# ── Rate Limiter ──────────────────────────────────────────────
+# Uses Redis when available (shared across server instances; survives
+# process restarts as long as the Redis container itself is not recreated).
+# Falls back to in-memory when Redis is not configured or unreachable.
 
 class RateLimiter:
-    """Per-IP sliding window rate limiter."""
+    """
+    Per-IP sliding window rate limiter.
+
+    Redis mode  : uses a sorted set per IP; atomic and persistent.
+    Fallback mode: in-memory defaultdict; resets on server restart.
+    """
 
     def __init__(self, max_requests: int, window_seconds: int = 60):
         self.max_requests = max_requests
         self.window = window_seconds
         self._requests: dict[str, list[float]] = defaultdict(list)
 
-    def is_allowed(self, client_ip: str) -> bool:
+    async def is_allowed(self, client_ip: str) -> bool:
+        redis = get_redis()
+        if redis is not None:
+            return await self._redis_is_allowed(redis, client_ip)
+        return self._memory_is_allowed(client_ip)
+
+    async def retry_after(self, client_ip: str) -> int:
+        redis = get_redis()
+        if redis is not None:
+            return await self._redis_retry_after(redis, client_ip)
+        return self._memory_retry_after(client_ip)
+
+    # ── Redis implementation ──────────────────────────────────
+
+    async def _redis_is_allowed(self, redis, client_ip: str) -> bool:
+        key = f"rate:{client_ip}"
         now = time.time()
         window_start = now - self.window
+        try:
+            pipe = redis.pipeline()
+            # Remove timestamps outside the current window
+            await pipe.zremrangebyscore(key, "-inf", window_start)
+            # Count remaining requests in window
+            await pipe.zcard(key)
+            # Add current request timestamp
+            await pipe.zadd(key, {str(now): now})
+            # Reset TTL so the key expires after the window
+            await pipe.expire(key, self.window)
+            results = await pipe.execute()
+            count_before = results[1]
+            return count_before < self.max_requests
+        except Exception as e:
+            logger.warning("Redis rate limit check failed: %s — falling back to allow", e)
+            return True
 
-        # Prune old entries
+    async def _redis_retry_after(self, redis, client_ip: str) -> int:
+        key = f"rate:{client_ip}"
+        try:
+            oldest = await redis.zrange(key, 0, 0, withscores=True)
+            if oldest:
+                oldest_ts = oldest[0][1]
+                return max(1, int(self.window - (time.time() - oldest_ts)))
+        except Exception:
+            pass
+        return self.window
+
+    # ── In-memory fallback ────────────────────────────────────
+
+    def _memory_is_allowed(self, client_ip: str) -> bool:
+        now = time.time()
+        window_start = now - self.window
         self._requests[client_ip] = [
             t for t in self._requests[client_ip] if t > window_start
         ]
-
         if len(self._requests[client_ip]) >= self.max_requests:
             return False
-
         self._requests[client_ip].append(now)
         return True
 
-    def retry_after(self, client_ip: str) -> int:
-        """Seconds until the oldest request in the window expires."""
+    def _memory_retry_after(self, client_ip: str) -> int:
         if not self._requests[client_ip]:
             return 0
         oldest = min(self._requests[client_ip])
@@ -112,6 +155,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Running in DEV mode (relaxed security)")
 
+    # ── Redis ─────────────────────────────────────────────────────
+    await setup_redis(settings.REDIS_URL)
+
     from app.services.ml.predictor import predictor  # noqa: F401
 
     logger.info("ML models loaded: %s", predictor.loaded)
@@ -142,6 +188,7 @@ async def lifespan(app: FastAPI):
     if settings.BROWSER_ANALYSIS_ENABLED:
         from app.services.browser_analyzer import container_manager
         await container_manager.stop()
+    await close_redis()
     logger.info("Shutting down")
 
 
@@ -168,8 +215,8 @@ async def rate_limit_middleware(request: Request, call_next):
     # Only rate-limit the scan endpoint, not health checks
     if request.url.path.endswith("/scan"):
         client_ip = _get_client_ip(request)
-        if not rate_limiter.is_allowed(client_ip):
-            retry_after = rate_limiter.retry_after(client_ip)
+        if not await rate_limiter.is_allowed(client_ip):
+            retry_after = await rate_limiter.retry_after(client_ip)
             logger.warning("Rate limit exceeded for %s", client_ip)
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

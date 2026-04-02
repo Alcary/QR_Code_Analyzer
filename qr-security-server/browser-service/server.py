@@ -11,9 +11,11 @@ Endpoints:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
+import socket
 import time
 from urllib.parse import urlparse
 
@@ -28,6 +30,57 @@ logger = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────
 PAGE_TIMEOUT_MS = int(os.environ.get("PAGE_TIMEOUT_MS", "12000"))
 PORT = int(os.environ.get("PORT", "3000"))
+
+# Private / reserved ranges that sub-requests must never reach.
+_PRIVATE_NETS = [
+    ipaddress.ip_network(cidr) for cidr in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",   # link-local
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+]
+
+
+def _is_ssrf_target(url: str) -> bool:
+    """
+    Return True if the request URL resolves to a private / reserved address.
+
+    Called synchronously inside Playwright's route handler.  Uses a
+    short-timeout blocking DNS lookup — acceptable here because each
+    page analysis runs in its own thread-isolated context and the
+    lookup is bounded.
+
+    Returns False (allow) if the hostname cannot be parsed or resolved,
+    so legitimate pages are never accidentally blocked by DNS hiccups.
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        if not host:
+            return False
+        # Raw IP — check directly without DNS
+        try:
+            addr = ipaddress.ip_address(host)
+            return any(addr in net for net in _PRIVATE_NETS)
+        except ValueError:
+            pass
+        # Hostname — resolve and check
+        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for _, _, _, _, sockaddr in resolved:
+            try:
+                addr = ipaddress.ip_address(sockaddr[0])
+                if any(addr in net for net in _PRIVATE_NETS):
+                    return True
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return False
 
 
 # ── Feature Extraction ───────────────────────────────────────
@@ -425,17 +478,27 @@ async def handle_analyze(request: web.Request) -> web.Response:
         )
         page = await context.new_page()
 
-        # Block known tracking / ad domains to speed up load
-        await page.route("**/*", lambda route: (
-            route.abort() if any(
-                d in route.request.url for d in [
-                    "google-analytics.com",
-                    "googletagmanager.com",
-                    "doubleclick.net",
-                    "facebook.net/tr",
-                ]
-            ) else route.continue_()
-        ))
+        # Block requests to private/internal addresses (SSRF via subresources)
+        # and known tracking/ad domains (noise reduction).
+        _TRACKING = (
+            "google-analytics.com",
+            "googletagmanager.com",
+            "doubleclick.net",
+            "facebook.net/tr",
+        )
+
+        async def _route_handler(route):
+            req_url = route.request.url
+            if _is_ssrf_target(req_url):
+                logger.debug("Blocked SSRF sub-request: %s", req_url[:120])
+                await route.abort()
+                return
+            if any(t in req_url for t in _TRACKING):
+                await route.abort()
+                return
+            await route.continue_()
+
+        await page.route("**/*", _route_handler)
 
         result = await extract_features(page, url)
         return web.json_response(result)
@@ -453,9 +516,13 @@ async def handle_analyze(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health — liveness probe."""
+    try:
+        browser_ok = _browser is not None and _browser.is_connected()
+    except Exception:
+        browser_ok = False
     return web.json_response({
-        "status": "ok",
-        "browser": _browser is not None and _browser.is_connected(),
+        "status": "ok" if browser_ok else "degraded",
+        "browser": browser_ok,
     })
 
 
