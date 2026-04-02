@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     BROWSER_PAGE_TIMEOUT_MS: int = 12000
     BROWSER_MAX_CONCURRENT: int = 5
 
+    # ── Redis ─────────────────────────────────────────────────
+    # Set to empty string to disable Redis and fall back to in-memory.
+    REDIS_URL: str = ""
+
     # ── Cache ─────────────────────────────────────────────────
     CACHE_MAX_SIZE: int = 2000
     CACHE_TTL: int = 3600  # 1 hour

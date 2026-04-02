@@ -52,17 +52,24 @@ def setup_logging() -> None:
             )
             return
         except Exception as e:
-            # Don't crash the server over a logging misconfiguration
-            pass
+            # Don't crash the server over a logging misconfiguration.
+            # Fall through to basicConfig below and report what went wrong.
+            logging.basicConfig(level=logging.INFO)
+            logging.getLogger(__name__).warning(
+                "Failed to load logging config from %s (%s) — using basicConfig fallback",
+                config_path,
+                e,
+            )
+            return
 
-    # Fallback
+    # Fallback: no config file found
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.getLogger(__name__).warning(
-        "Could not load logging.yaml — using basicConfig fallback"
+        "logging.yaml not found — using basicConfig fallback"
     )
 
 

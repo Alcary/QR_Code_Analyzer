@@ -38,9 +38,19 @@ __pycache__/
 .venv/
 venv/
 
+# === Cache ===
+tldextract_cache/
+.pytest_cache/
+.ruff_cache/
+
+# === Logs ===
+qr-security-server/logs/
+
 # === IDE ===
 .vscode/
 .idea/
 
 # === Expo root-level artifacts ===
 .expo/
+
+.claude
