@@ -119,6 +119,8 @@ class ContainerManager:
                 self.host_port = container_port
         else:
             self.host_port = host_port
+        # Lock: only one restart attempt at a time
+        self._restart_lock = asyncio.Lock()
 
     def _get_client(self):
         """Lazy-init Docker client."""
@@ -254,12 +256,21 @@ class ContainerManager:
         """
         Check if the container is alive; restart it if not.
         Called before each analysis request.
+
+        The restart lock ensures that if multiple requests find the container
+        dead simultaneously, only one of them does the restart work. The
+        others wait and then re-check rather than all trying to rebuild at once.
         """
         if await self._is_healthy():
             return True
 
-        logger.warning("Browser container is not healthy — restarting...")
-        return await self.start()
+        async with self._restart_lock:
+            # Re-check inside the lock — another coroutine may have already
+            # restarted the container while we were waiting to acquire it.
+            if await self._is_healthy():
+                return True
+            logger.warning("Browser container is not healthy — restarting...")
+            return await self.start()
 
     async def _is_healthy(self) -> bool:
         """Quick HTTP health check against the browser service."""
@@ -291,9 +302,14 @@ class BrowserAnalyzer:
     each analysis. If the container crashed, it restarts it.
     """
 
-    def __init__(self, service_url: str, timeout: float = 15.0):
+    def __init__(self, service_url: str, timeout: float = 15.0, max_concurrent: int = 5):
         self.service_url = service_url.rstrip("/")
         self.timeout = timeout
+        # Semaphore: limits how many pages can be rendered at the same time.
+        # Each browser context uses ~50-100 MB, so 5 concurrent renders fit
+        # comfortably within the container's 1 GB memory limit.
+        # Requests beyond this limit wait in a queue automatically.
+        self._semaphore = asyncio.Semaphore(max_concurrent)
 
     async def analyze(self, url: str) -> BrowserResult:
         """
@@ -302,6 +318,7 @@ class BrowserAnalyzer:
         success=False and an error message).
 
         Automatically restarts the container if it's not healthy.
+        At most `max_concurrent` renders run simultaneously; others queue.
         """
         result = BrowserResult()
 
@@ -312,6 +329,13 @@ class BrowserAnalyzer:
                 result.error = "browser_container_unavailable"
                 logger.warning("Browser container unavailable — skipping browser analysis")
                 return result
+
+        async with self._semaphore:
+            return await self._do_analyze(url)
+
+    async def _do_analyze(self, url: str) -> BrowserResult:
+        """Inner analysis call — runs under the concurrency semaphore."""
+        result = BrowserResult()
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -599,4 +623,5 @@ def _map_brand_features(result: BrowserResult, bf: dict) -> None:
 browser_analyzer = BrowserAnalyzer(
     service_url=settings.BROWSER_SERVICE_URL,
     timeout=settings.BROWSER_TIMEOUT,
+    max_concurrent=settings.BROWSER_MAX_CONCURRENT,
 )
