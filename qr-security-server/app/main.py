@@ -10,11 +10,9 @@ from fastapi.responses import JSONResponse
 from app.api.endpoints import scan, health
 from app.api.middleware import RequestLoggingMiddleware
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 

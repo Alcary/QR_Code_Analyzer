@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     BROWSER_TIMEOUT: float = 15.0
     BROWSER_ANALYSIS_ENABLED: bool = True
     BROWSER_PAGE_TIMEOUT_MS: int = 12000
+    BROWSER_MAX_CONCURRENT: int = 5
 
     # ── Cache ─────────────────────────────────────────────────
     CACHE_MAX_SIZE: int = 2000

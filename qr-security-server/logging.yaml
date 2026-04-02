@@ -1,0 +1,58 @@
+version: 1
+disable_existing_loggers: false
+
+# ── Formatters ────────────────────────────────────────────────
+formatters:
+  standard:
+    format: "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+  detailed:
+    format: "%(asctime)s  %(levelname)-8s  %(name)s  [%(filename)s:%(lineno)d]  %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+# ── Handlers ──────────────────────────────────────────────────
+handlers:
+  # Always prints to terminal
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  # Rotating file handler — new file every midnight, keep 7 days
+  file:
+    class: logging.handlers.TimedRotatingFileHandler
+    level: INFO
+    formatter: detailed
+    filename: logs/server.log
+    when: midnight       # rotate at midnight
+    interval: 1          # every 1 day
+    backupCount: 7        # keep last 7 days, delete older
+    encoding: utf8
+
+# ── Loggers ───────────────────────────────────────────────────
+loggers:
+  # Silence noisy third-party libraries
+  uvicorn:
+    level: WARNING
+    propagate: false
+    handlers: [console, file]
+
+  uvicorn.access:
+    level: WARNING
+    propagate: false
+    handlers: [console, file]
+
+  aiohttp:
+    level: WARNING
+    propagate: false
+
+  multipart:
+    level: WARNING
+    propagate: false
+
+# ── Root logger (catches everything else) ─────────────────────
+root:
+  level: INFO
+  handlers: [console, file]
