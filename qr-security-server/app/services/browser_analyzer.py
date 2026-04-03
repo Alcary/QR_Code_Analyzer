@@ -86,8 +86,90 @@ class BrowserResult:
     brand_domain_mismatch: bool = False
     impersonated_brand: str | None = None
 
+    # Page metadata
+    has_title: bool = False
+    domain_title_match_score: float = 0.0
+    has_favicon: bool = False
+    has_submit_button: bool = False
+    has_hidden_fields: bool = False
+
+    # Link analysis
+    self_ref_count: int = 0
+    empty_ref_count: int = 0
+    external_ref_count: int = 0
+
+    # Financial keywords
+    has_bank_keyword: bool = False
+    has_pay_keyword: bool = False
+    has_crypto_keyword: bool = False
+
+    # Popups / dialogs
+    popup_count: int = 0
+
+    # Redirects
+    redirect_count: int = 0
+
     # Timing
     page_load_ms: int = 0
+
+    def to_ml_features(self) -> dict:
+        """Export page-level features for the ML predictor.
+
+        Returns a dict whose keys match the page feature names in
+        ``feature_names.json``.  When the browser analysis failed
+        (``success=False``), all values default to 0.
+        """
+        if not self.success:
+            return {}
+        return {
+            # Metadata
+            "has_title": int(self.has_title),
+            "domain_title_match_score": self.domain_title_match_score,
+            "has_favicon": int(self.has_favicon),
+            # Popups / dialogs (redirect_count, domain_changed, url_changed, popup_count
+            # are excluded — they come from Playwright navigation/dialog events and
+            # cannot be extracted from static HTML at training time)
+            # iframes
+            "iframe_count": self.iframe_count,
+            "external_iframe_count": self.external_iframe_count,
+            # Forms & inputs
+            "external_form_action": int(self.external_form_action),
+            "has_submit_button": int(self.has_submit_button),
+            "has_hidden_fields": int(self.has_hidden_fields),
+            "has_password_field": int(self.has_password_field),
+            "has_login_form": int(self.has_login_form),
+            "has_credit_card_input": int(self.has_credit_card_input),
+            "has_cvv_input": int(self.has_cvv_input),
+            "has_ssn_input": int(self.has_ssn_input),
+            "hidden_input_count": self.hidden_input_count,
+            # JS obfuscation
+            "has_eval_usage": int(self.has_eval_usage),
+            "has_atob_eval": int(self.has_atob_eval),
+            "has_document_write": int(self.has_document_write),
+            "has_unescape": int(self.has_unescape),
+            "has_fromcharcode": int(self.has_fromcharcode),
+            # Anti-analysis
+            "disables_right_click": int(self.disables_right_click),
+            "disables_text_selection": int(self.disables_text_selection),
+            "has_devtools_detection": int(self.has_devtools_detection),
+            # Social engineering
+            "has_urgency_text": int(self.has_urgency_text),
+            "has_threat_text": int(self.has_threat_text),
+            # Cloaking
+            "hidden_elements_with_content": self.hidden_elements_with_content,
+            # Brand impersonation
+            "brand_domain_mismatch": int(self.brand_domain_mismatch),
+            # Financial keywords
+            "has_bank_keyword": int(self.has_bank_keyword),
+            "has_pay_keyword": int(self.has_pay_keyword),
+            "has_crypto_keyword": int(self.has_crypto_keyword),
+            # External scripts
+            "external_script_domains": self.external_script_domains,
+            # Link analysis
+            "self_ref_count": self.self_ref_count,
+            "empty_ref_count": self.empty_ref_count,
+            "external_ref_count": self.external_ref_count,
+        }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -601,9 +683,65 @@ class BrowserAnalyzer:
             risk += 0.05
             factors.append(_rf(
                 "browser_js_redirect",
-                f"Page redirected via JavaScript to different domain",
+                "Page redirected via JavaScript to different domain",
                 "medium",
                 evidence=result.final_url,
+            ))
+
+        # ── Missing favicon ──
+        if not result.has_favicon:
+            risk += 0.03
+            factors.append(_rf(
+                "browser_no_favicon",
+                "Page has no favicon (common in phishing pages)",
+                "low",
+            ))
+
+        # ── Empty links (cloned page indicator) ──
+        total_links = result.self_ref_count + result.empty_ref_count + result.external_ref_count
+        if total_links > 5 and result.empty_ref_count > total_links * 0.5:
+            risk += 0.10
+            factors.append(_rf(
+                "browser_many_empty_links",
+                f"Majority of links are non-functional ({result.empty_ref_count}/{total_links})",
+                "high",
+                evidence=f"{result.empty_ref_count}/{total_links}",
+            ))
+
+        # ── Popup / dialog abuse ──
+        if result.popup_count >= 2:
+            risk += 0.08
+            factors.append(_rf(
+                "browser_popup_abuse",
+                f"Page triggered {result.popup_count} popups/dialogs",
+                "medium",
+                evidence=str(result.popup_count),
+            ))
+
+        # ── Financial keyword with login form ──
+        has_financial = result.has_bank_keyword or result.has_pay_keyword or result.has_crypto_keyword
+        if has_financial and result.has_login_form:
+            risk += 0.10
+            keywords = [k for k, v in [
+                ("banking", result.has_bank_keyword),
+                ("payment", result.has_pay_keyword),
+                ("crypto", result.has_crypto_keyword),
+            ] if v]
+            factors.append(_rf(
+                "browser_financial_login",
+                f"Login form combined with financial keywords ({', '.join(keywords)})",
+                "high",
+                evidence=", ".join(keywords),
+            ))
+
+        # ── Excessive redirects ──
+        if result.redirect_count >= 3:
+            risk += 0.08
+            factors.append(_rf(
+                "browser_redirect_chain",
+                f"Page went through {result.redirect_count} redirects",
+                "medium",
+                evidence=str(result.redirect_count),
             ))
 
         return min(1.0, risk), factors
@@ -641,6 +779,18 @@ def _map_page_features(result: BrowserResult, pf: dict) -> None:
     result.has_threat_text = pf.get("has_threat_text", False)
     result.hidden_elements_with_content = pf.get("hidden_elements_with_content", 0)
     result.page_title = pf.get("page_title", "")
+    result.has_title = pf.get("has_title", False)
+    result.domain_title_match_score = pf.get("domain_title_match_score", 0.0)
+    result.has_favicon = pf.get("has_favicon", False)
+    result.has_hidden_fields = pf.get("has_hidden_fields", False)
+    result.has_submit_button = pf.get("has_submit_button", False)
+    result.self_ref_count = pf.get("self_ref_count", 0)
+    result.empty_ref_count = pf.get("empty_ref_count", 0)
+    result.external_ref_count = pf.get("external_ref_count", 0)
+    result.has_bank_keyword = pf.get("has_bank_keyword", False)
+    result.has_pay_keyword = pf.get("has_pay_keyword", False)
+    result.has_crypto_keyword = pf.get("has_crypto_keyword", False)
+    result.popup_count = pf.get("popup_count", 0)
 
 
 def _map_network_features(result: BrowserResult, nf: dict) -> None:
@@ -652,6 +802,7 @@ def _map_network_features(result: BrowserResult, nf: dict) -> None:
 def _map_redirect_features(result: BrowserResult, rf: dict) -> None:
     result.url_changed = rf.get("url_changed", False)
     result.domain_changed = rf.get("domain_changed", False)
+    result.redirect_count = rf.get("redirect_count", 0)
     if rf.get("final_url"):
         result.final_url = rf["final_url"]
 

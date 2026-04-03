@@ -121,9 +121,17 @@ class MLPredictor:
 
     # ── Prediction ─────────────────────────────────────────────
 
-    def predict(self, url: str) -> dict | None:
+    def predict(self, url: str, page_features: dict | None = None) -> dict | None:
         """
         Run XGBoost prediction on a URL.
+
+        Args:
+            url: The URL to classify.
+            page_features: Optional dict of browser-extracted page features
+                (from ``BrowserResult.to_ml_features()``).  When provided,
+                these are merged into the feature vector so the model can
+                use both URL-level and page-level signals.  When ``None``
+                (browser unavailable), page feature slots default to 0.
 
         Returns dict:
             ml_score    — P(malicious) in [0, 1]
@@ -134,29 +142,31 @@ class MLPredictor:
         if not self.loaded:
             return None
 
-        score = self._predict_xgboost(url)
+        score = self._predict_xgboost(url, page_features)
         if score is None:
             return None
 
         return {
             "ml_score": float(score),
             "xgb_score": float(score),
-            "explanation": self._explain(url),
+            "explanation": self._explain(url, page_features),
         }
 
-    def _explain(self, url: str) -> Optional[dict]:
+    def _explain(self, url: str, page_features: dict | None = None) -> Optional[dict]:
         """Generate SHAP feature-attribution explanation."""
         if self._shap_explainer is None:
             return None
         try:
             from app.services.url_features import extract_features
             features = extract_features(url)
+            if page_features:
+                features.update(page_features)
             return self._shap_explainer.explain(features, top_k=8)
         except Exception as e:
             logger.error("SHAP explanation error: %s", e)
             return None
 
-    def _predict_xgboost(self, url: str) -> float | None:
+    def _predict_xgboost(self, url: str, page_features: dict | None = None) -> float | None:
         """XGBoost prediction → P(malicious) in [0, 1]."""
         if self.xgb_model is None:
             return None
@@ -164,6 +174,8 @@ class MLPredictor:
             from app.services.url_features import extract_features
 
             feats = extract_features(url)
+            if page_features:
+                feats.update(page_features)
             ordered = [feats.get(name, 0) for name in self.feature_names]
             X = np.array([ordered], dtype=np.float32)
 

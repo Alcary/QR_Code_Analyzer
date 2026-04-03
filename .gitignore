@@ -46,6 +46,11 @@ tldextract_cache/
 # === Logs ===
 qr-security-server/logs/
 
+# === Datasets (large files, not tracked in git) ===
+*.csv
+qr-security-server/models/*.pkl
+qr-security-server/models/*.json
+
 # === IDE ===
 .vscode/
 .idea/

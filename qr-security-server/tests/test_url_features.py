@@ -9,7 +9,7 @@ import pytest
 
 from app.services.url_features import FEATURE_NAMES, extract_features, get_risk_factors
 
-EXPECTED_FEATURE_COUNT = 95
+EXPECTED_FEATURE_COUNT = 59
 
 # ── FEATURE_NAMES ─────────────────────────────────────────────
 
@@ -45,11 +45,8 @@ def test_extract_features_returns_all_names():
         ("javascript://evil.com/x", "has_javascript", 1),
         # Known URL shortener
         ("https://bit.ly/abc123", "is_url_shortener", 1),
-        # HTTPS flag
+        # HTTPS / HTTP flag
         ("https://example.com", "is_https", 1),
-        ("https://example.com", "is_http", 0),
-        # HTTP flag
-        ("http://example.com", "is_http", 1),
         ("http://example.com", "is_https", 0),
         # Suspicious TLD
         ("https://example.tk", "is_suspicious_tld", 1),
@@ -67,7 +64,6 @@ def test_extract_features_returns_all_names():
         ("data:text/html,hello", "has_data_uri", 1),
         # Dangerous extension
         ("https://example.com/malware.exe", "has_dangerous_ext", 1),
-        ("https://example.com/malware.exe", "has_exe", 1),
     ],
 )
 def test_feature_flag(url: str, feature: str, expected: int):

@@ -30,7 +30,7 @@ _analyzer = BrowserAnalyzer(service_url="http://localhost:3000", timeout=15.0)
 
 def _clean_result() -> BrowserResult:
     """A successful browser result with no risk signals."""
-    return BrowserResult(success=True)
+    return BrowserResult(success=True, has_favicon=True)
 
 
 def _phishing_result() -> BrowserResult:
