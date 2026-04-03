@@ -9,7 +9,6 @@ The feature names and their order are verified against feature_names.json at sta
 import ipaddress
 import re
 import math
-import numpy as np
 from urllib.parse import urlparse, parse_qs, unquote
 from collections import Counter
 
@@ -151,7 +150,7 @@ def bigram_score(text: str) -> float:
 
 def extract_features(url: str) -> dict:
     """
-    Extract 95 features from a single URL.
+    Extract 59 features from a single URL.
 
     CRITICAL: This function must produce features identical to the training
     notebook. Do not modify without updating the notebook as well.
@@ -167,7 +166,6 @@ def extract_features(url: str) -> dict:
     scheme = parsed.scheme.lower()
     path = parsed.path
     query = parsed.query
-    fragment = parsed.fragment
 
     # Domain extraction — use parsed.hostname which correctly handles
     # userinfo (http://user:pass@host), ports, and IPv6 brackets.
@@ -194,54 +192,40 @@ def extract_features(url: str) -> dict:
     f["domain_length"] = len(domain)
     f["path_length"] = len(path)
     f["query_length"] = len(query)
-    f["fragment_length"] = len(fragment)
     f["subdomain_length"] = len(subdomain)
-    f["tld_length"] = len(tld)
     f["longest_domain_part"] = max((len(p) for p in parts), default=0)
-    f["avg_domain_part_len"] = float(np.mean([len(p) for p in parts])) if parts else 0.0
-    f["longest_path_part"] = max((len(p) for p in path_parts), default=0)
-    f["avg_path_part_len"] = float(np.mean([len(p) for p in path_parts])) if path_parts else 0.0
 
     # ═══ COUNTS ═══
     for ch, name in [
-        (".", "dot"), ("-", "hyphen"), ("_", "underscore"),
-        ("/", "slash"), ("?", "question"), ("=", "equals"),
-        ("&", "amp"), ("@", "at"), ("%", "percent"),
-        ("~", "tilde"), ("#", "hash"), (":", "colon"),
-        (";", "semicolon"),
+        (".", "dot"), ("-", "hyphen"),
+        ("/", "slash"), ("%", "percent"),
     ]:
         f[f"{name}_count"] = url.count(ch)
 
-    f["domain_dot_count"] = domain.count(".")
     f["domain_hyphen_count"] = domain.count("-")
     f["domain_digit_count"] = sum(c.isdigit() for c in domain)
     f["subdomain_count"] = subdomain.count(".") + 1 if subdomain else 0
     f["path_depth"] = len(path_parts)
-    f["digit_count"] = sum(c.isdigit() for c in url)
-    f["letter_count"] = sum(c.isalpha() for c in url)
-    f["uppercase_count"] = sum(c.isupper() for c in url)
-    f["special_char_count"] = sum(not c.isalnum() for c in url)
 
     try:
         qp = parse_qs(query)
         f["query_param_count"] = len(qp)
-        f["query_value_total_len"] = sum(len(v) for vals in qp.values() for v in vals)
     except Exception:
         f["query_param_count"] = 0
-        f["query_value_total_len"] = 0
 
     # ═══ RATIOS ═══
     ul = max(len(url), 1)
     dl = max(len(domain), 1)
-    f["digit_ratio"] = f["digit_count"] / ul
-    f["letter_ratio"] = f["letter_count"] / ul
-    f["special_char_ratio"] = f["special_char_count"] / ul
-    f["uppercase_ratio"] = f["uppercase_count"] / max(f["letter_count"], 1)
+    _digit_count = sum(c.isdigit() for c in url)
+    _letter_count = sum(c.isalpha() for c in url)
+    _special_count = sum(not c.isalnum() for c in url)
+    f["digit_ratio"] = _digit_count / ul
+    f["letter_ratio"] = _letter_count / ul
+    f["special_char_ratio"] = _special_count / ul
     f["domain_digit_ratio"] = f["domain_digit_count"] / dl
     f["domain_hyphen_ratio"] = f["domain_hyphen_count"] / dl
     f["path_url_ratio"] = f["path_length"] / ul
     f["query_url_ratio"] = f["query_length"] / ul
-    f["domain_url_ratio"] = f["domain_length"] / ul
 
     # ═══ ENTROPY ═══
     f["url_entropy"] = calc_entropy(url)
@@ -252,8 +236,6 @@ def extract_features(url: str) -> dict:
 
     # ═══ BOOLEAN ═══
     f["is_https"] = int(scheme == "https")
-    f["is_http"] = int(scheme == "http")
-    f["has_www"] = int(domain.startswith("www."))
     f["has_port"] = int(has_port)
     f["has_at_symbol"] = int("@" in url)
     f["has_double_slash_in_path"] = int("//" in path)
@@ -265,19 +247,13 @@ def extract_features(url: str) -> dict:
     except ValueError:
         f["has_ip_address"] = 0
     f["has_hex_ip"] = int(bool(re.match(r"^(0x[0-9a-f]+\.){3}0x[0-9a-f]+$", domain)))
-    f["has_ip_like"] = int(domain.replace(".", "").isdigit() and len(domain) > 6)
 
     # ═══ TLD ═══
     f["is_suspicious_tld"] = int(tld in SUSPICIOUS_TLDS)
     f["is_trusted_tld"] = int(tld in TRUSTED_TLDS)
-    f["is_com"] = int(tld == "com")
-    f["is_org"] = int(tld == "org")
-    f["is_net"] = int(tld == "net")
-    f["is_country_tld"] = int(len(tld) == 2 and tld.isalpha())
 
     # ═══ CHARACTER DISTRIBUTION ═══
     f["max_consec_digits"] = max_run(url, str.isdigit)
-    f["max_consec_letters"] = max_run(url, str.isalpha)
     f["max_consec_special"] = max_run(url, lambda c: not c.isalnum())
     vowels = set("aeiou")
     dom_letters = [c for c in domain if c.isalpha()]
@@ -292,13 +268,8 @@ def extract_features(url: str) -> dict:
     f["malware_keyword_count"] = sum(1 for k in MALWARE_KEYWORDS if k in url_lower)
     f["is_url_shortener"] = int(ext.top_domain_under_public_suffix in URL_SHORTENERS)
     f["has_dangerous_ext"] = int(any(path_lower.endswith(e) for e in DANGEROUS_EXTS))
-    f["has_exe"] = int(path_lower.endswith(".exe"))
-    f["has_php"] = int(".php" in path_lower)
 
     # ═══ STRUCTURAL PATTERNS ═══
-    f["has_double_letters"] = int(bool(re.search(r"(.)\1", domain)))
-    f["has_long_subdomain"] = int(len(subdomain) > 20)
-    f["has_deep_path"] = int(len(path_parts) > 5)
     f["has_embedded_url"] = int("http" in path_lower or "www" in path_lower)
     f["has_data_uri"] = int(url_lower.startswith("data:"))
     f["has_javascript"] = int("javascript:" in url_lower)
@@ -325,7 +296,6 @@ def extract_features(url: str) -> dict:
     domain_name_only = ext.domain or domain
     f["domain_bigram_score"] = bigram_score(domain_name_only)
     f["subdomain_bigram_score"] = bigram_score(subdomain) if subdomain else 0.0
-    f["path_bigram_score"] = bigram_score("".join(path_parts)) if path_parts else 0.0
 
     return f
 

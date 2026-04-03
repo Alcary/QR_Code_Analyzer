@@ -17,6 +17,7 @@ import logging
 import os
 import socket
 import time
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
@@ -93,6 +94,8 @@ async def extract_features(page, url: str) -> dict:
     network_requests: list[dict] = []
     console_messages: list[str] = []
     js_errors: list[str] = []
+    popup_count = 0
+    redirect_chain: list[str] = []
 
     # ── Listeners ──
     def on_request(req):
@@ -103,6 +106,7 @@ async def extract_features(page, url: str) -> dict:
                 "method": req.method,
                 "resource_type": req.resource_type,
                 "domain": parsed.hostname or "",
+                "is_navigation": req.is_navigation_request(),
             })
         except Exception:
             pass
@@ -113,9 +117,20 @@ async def extract_features(page, url: str) -> dict:
     def on_page_error(err):
         js_errors.append(str(err)[:200])
 
+    def on_dialog(dialog):
+        nonlocal popup_count
+        popup_count += 1
+        asyncio.ensure_future(dialog.dismiss())
+
+    def on_response(resp):
+        if resp.request.is_navigation_request() and 300 <= resp.status < 400:
+            redirect_chain.append(resp.url)
+
     page.on("request", on_request)
     page.on("console", on_console)
     page.on("pageerror", on_page_error)
+    page.on("dialog", on_dialog)
+    page.on("response", on_response)
 
     # ── Navigate ──
     start = time.perf_counter()
@@ -227,6 +242,7 @@ async def extract_features(page, url: str) -> dict:
 
         // --- Page Metadata ---
         result.page_title = document.title || '';
+        result.has_title = !!(document.title && document.title.trim());
         result.meta_description = (
             document.querySelector('meta[name="description"]')?.content || ''
         ).substring(0, 200);
@@ -259,11 +275,68 @@ async def extract_features(page, url: str) -> dict:
         }
         result.hidden_elements_with_content = Math.min(hiddenWithContent, 20);
 
+        // --- Favicon ---
+        result.has_favicon = !!document.querySelector('link[rel*="icon"]');
+
+        // --- Submit button ---
+        result.has_submit_button = !!(
+            document.querySelector('input[type="submit"]')
+            || document.querySelector('button[type="submit"]')
+            || Array.from(document.querySelectorAll('button')).some(
+                b => /sign.?in|log.?in|submit|continue|verify/i.test(b.textContent)
+            )
+        );
+
+        // --- Link analysis (self / empty / external refs) ---
+        const anchors = Array.from(document.querySelectorAll('a[href]'));
+        let selfRefCount = 0;
+        let emptyRefCount = 0;
+        let externalRefCount = 0;
+        for (const a of anchors) {
+            const href = (a.getAttribute('href') || '').trim();
+            if (!href || href === '#' || href.startsWith('javascript:')) {
+                emptyRefCount++;
+            } else {
+                try {
+                    const linkUrl = new URL(href, window.location.href);
+                    if (linkUrl.hostname === currentHost) {
+                        selfRefCount++;
+                    } else {
+                        externalRefCount++;
+                    }
+                } catch {
+                    emptyRefCount++;
+                }
+            }
+        }
+        result.self_ref_count = selfRefCount;
+        result.empty_ref_count = emptyRefCount;
+        result.external_ref_count = externalRefCount;
+
+        // --- Financial keyword detection ---
+        result.has_bank_keyword = /\b(bank|banking|account.?number|routing.?number|wire.?transfer|iban|swift)\b/i
+            .test(bodyText);
+        result.has_pay_keyword = /\b(payment|pay.?now|billing|invoice|transaction|purchase|checkout)\b/i
+            .test(bodyText);
+        result.has_crypto_keyword = /\b(bitcoin|ethereum|crypto|wallet|btc|eth|blockchain|seed.?phrase|private.?key)\b/i
+            .test(bodyText);
+
         return result;
     }""")
 
-    # ── Network Request Analysis ──
+    # ── Domain–Title Similarity ──
     page_domain = urlparse(final_url).hostname or ""
+    _title = dom_features.get("page_title", "").strip().lower()
+    _domain_words = page_domain.replace(".", " ").replace("-", " ").lower()
+    dom_features["domain_title_match_score"] = (
+        round(SequenceMatcher(None, _domain_words, _title).ratio() * 100, 2)
+        if _title else 0.0
+    )
+
+    # ── Derived booleans for ML feature parity ──
+    dom_features["has_hidden_fields"] = dom_features.get("hidden_input_count", 0) > 0
+
+    # ── Network Request Analysis ──
     external_domains = set()
     script_domains = set()
     request_types = {}
@@ -292,7 +365,11 @@ async def extract_features(page, url: str) -> dict:
         "url_changed": final_url != url,
         "final_domain": urlparse(final_url).hostname or "",
         "domain_changed": page_domain != (urlparse(url).hostname or ""),
+        "redirect_count": len(redirect_chain),
     }
+
+    # ── Popup / Dialog count ──
+    dom_features["popup_count"] = popup_count
 
     # ── Brand Detection ──
     brand_features = _detect_brand_signals(

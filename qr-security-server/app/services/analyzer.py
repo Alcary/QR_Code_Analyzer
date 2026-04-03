@@ -1,14 +1,16 @@
 """
-URL Analyzer — Multi-Layer Orchestrator (v4)
+URL Analyzer — Multi-Layer Orchestrator (v5)
 
 Analysis pipeline:
 1. Input validation & URL normalization
-2. Cache check (TTL-based)
-3. ML prediction (XGBoost on 95 URL features)
-4. SSRF pre-check (security gate — blocks private/reserved IPs)
-5. Browser analysis (primary) OR full network checks (fallback):
+2. Cache check (Redis primary, in-memory fallback)
+3. SSRF pre-check (security gate — blocks private/reserved IPs)
+4. Browser analysis (primary) OR full network checks (fallback):
    - Browser OK  → DNS/SSL/WHOIS only (browser handles content)
    - Browser FAIL → DNS/SSL/HTTP/WHOIS (HTTP includes static content inspection)
+5. ML prediction (XGBoost on 95 URL + 17 page features)
+   - When browser succeeded, page features from BrowserResult are merged in
+   - When browser failed, page feature slots default to 0
 6. Computed domain trust score
 7. Network risk signals
 8. Browser risk signals (when available)
@@ -93,27 +95,9 @@ class URLAnalyzer:
         full_domain = get_full_domain(hostname)
         path = parsed.path
 
-        # ── 3. ML Prediction (XGBoost) ──
-        # Run CPU-bound XGBoost inference in a thread to avoid blocking
-        # the async event loop.
-        loop = asyncio.get_running_loop()
-        try:
-            ml_result = await loop.run_in_executor(None, predictor.predict, url)
-        except Exception as e:
-            logger.error("ML predictor raised an exception: %s", e)
-            ml_result = None
-        if ml_result:
-            ml_score = ml_result["ml_score"]
-            xgb_score = ml_result["xgb_score"]
-            explanation = ml_result.get("explanation")
-        else:
-            ml_score = 0.5
-            xgb_score = 0.5
-            explanation = None
-            logger.warning("ML model not loaded or failed, using fallback score")
-
-        # ── 4. SSRF Pre-Check (security gate — always runs) ──
+        # ── 3. SSRF Pre-Check (security gate — always runs) ──
         from app.services.network_inspector import _is_private_or_reserved, NetworkResult
+        loop = asyncio.get_running_loop()
         try:
             initial_host = urlparse(url if "://" in url else f"https://{url}").hostname or ""
             is_private = await loop.run_in_executor(
@@ -126,12 +110,12 @@ class URLAnalyzer:
             logger.warning("SSRF pre-check failed for %s: %s", url, exc)
             return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
 
-        # ── 5. Browser Analysis (primary) + Network Checks (DNS/SSL/WHOIS always, HTTP as fallback) ──
+        # ── 4. Browser Analysis (primary) + Network Checks ──
         # Strategy:
-        #   - DNS, SSL, WHOIS always run (independent signals)
         #   - Browser analysis is attempted first for content inspection
-        #   - If browser fails, full HTTP check runs as fallback (includes static content inspection)
+        #   - DNS, SSL, WHOIS always run (independent signals)
         #   - If browser succeeds, HTTP check is skipped (browser covers it better)
+        #   - If browser fails, full HTTP check runs as fallback (includes static content inspection)
 
         browser_result = BrowserResult()
         if settings.BROWSER_ANALYSIS_ENABLED:
@@ -141,14 +125,35 @@ class URLAnalyzer:
                 logger.error("Browser analysis raised: %s", e)
 
         if browser_result.success:
-            # Browser succeeded — run only DNS/SSL/WHOIS (skip HTTP, browser covered it)
             net = await network_inspector.inspect_without_http(url, hostname, registered_domain)
             logger.info("Browser analysis succeeded — using browser for content, skipped HTTP check")
         else:
-            # Browser failed — run full network checks including HTTP as fallback
             net = await network_inspector.inspect_all(url, hostname, registered_domain)
             if settings.BROWSER_ANALYSIS_ENABLED:
                 logger.warning("Browser analysis failed — falling back to static HTTP content inspection")
+
+        # ── 5. ML Prediction (XGBoost on URL + page features) ──
+        # Run CPU-bound XGBoost inference in a thread to avoid blocking
+        # the async event loop.  When the browser succeeded, its extracted
+        # page features are merged into the feature vector so the model can
+        # use both URL-level and page-level signals.
+        page_features = browser_result.to_ml_features() if browser_result.success else None
+        try:
+            ml_result = await loop.run_in_executor(
+                None, predictor.predict, url, page_features,
+            )
+        except Exception as e:
+            logger.error("ML predictor raised an exception: %s", e)
+            ml_result = None
+        if ml_result:
+            ml_score = ml_result["ml_score"]
+            xgb_score = ml_result["xgb_score"]
+            explanation = ml_result.get("explanation")
+        else:
+            ml_score = 0.5
+            xgb_score = 0.5
+            explanation = None
+            logger.warning("ML model not loaded or failed, using fallback score")
 
         # ── 6. Computed Domain Trust (replaces static whitelist) ──
         reputation = compute_domain_trust(
@@ -197,13 +202,14 @@ class URLAnalyzer:
         #   - browser_risk   : page-level signals from rendered content
         #   - heuristic_risk : URL-derived risk factors (keywords, structure)
         #
-        # When browser analysis is unavailable, fall back to the original
-        # three-signal weights so the system degrades gracefully.
+        # When browser is available, ML already incorporates page features,
+        # so the separate browser heuristic weight is reduced compared to v4.
+        # When browser is unavailable, fall back to a three-signal formula.
         if browser_result.success:
             final_score = (
-                0.40 * dampened_ml
+                0.50 * dampened_ml
                 + 0.20 * network_risk
-                + 0.25 * browser_risk
+                + 0.15 * browser_risk
                 + 0.15 * heuristic_risk
             )
         else:
