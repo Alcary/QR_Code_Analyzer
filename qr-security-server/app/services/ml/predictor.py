@@ -1,29 +1,27 @@
 """
 ML Predictor — v4 (XGBoost-only)
 
-Loads and runs the XGBoost classifier on 95 handcrafted URL features.
-The 95 features (entropy, structure, homograph detection, n-grams, etc.)
-already capture the character-level patterns that CharCNN was meant to
-learn, but more reliably and interpretably.
+Loads and runs the XGBoost classifier on 73 features (45 URL + 28 browser/page).
+The full extractor computes 92 features; 19 near-constant ones were dropped during
+training and are not present in feature_names.json.  The predictor filters to
+exactly the 73 model features via ``feats.get(name, 0) for name in feature_names``.
 
 v4 changes (simplification):
-- Removed CharCNN and meta-learner — XGBoost alone with 95 features
-  proved more robust than the ensemble which suffered from training
-  data format bias in the CharCNN component.
-- Removed URL normalization hack (was needed only to work around
-  CharCNN's sensitivity to bare domains vs. trailing-slash domains).
+- Removed CharCNN and meta-learner — XGBoost alone proved more robust than
+  the ensemble which suffered from training data format bias in the CharCNN.
+- Removed URL normalization hack (was needed only to work around CharCNN's
+  sensitivity to bare domains vs. trailing-slash domains).
 - SHAP TreeExplainer provides direct per-feature explanations.
 
 Models expected in `models/`:
   models/
     xgb_model.pkl       — CalibratedClassifierCV(XGBClassifier)
-    feature_names.json  — ordered list of 95 feature names
+    feature_names.json  — ordered list of 73 feature names
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -152,7 +150,7 @@ class MLPredictor:
             "explanation": self._explain(url, page_features),
         }
 
-    def _explain(self, url: str, page_features: dict | None = None) -> Optional[dict]:
+    def _explain(self, url: str, page_features: dict | None = None) -> dict | None:
         """Generate SHAP feature-attribution explanation."""
         if self._shap_explainer is None:
             return None

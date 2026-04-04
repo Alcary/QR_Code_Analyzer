@@ -8,7 +8,7 @@ Analysis pipeline:
 4. Browser analysis (primary) OR full network checks (fallback):
    - Browser OK  → DNS/SSL/WHOIS only (browser handles content)
    - Browser FAIL → DNS/SSL/HTTP/WHOIS (HTTP includes static content inspection)
-5. ML prediction (XGBoost on 95 URL + 17 page features)
+5. ML prediction (XGBoost on 73 features: 45 URL + 28 browser/page)
    - When browser succeeded, page features from BrowserResult are merged in
    - When browser failed, page feature slots default to 0
 6. Computed domain trust score
@@ -30,18 +30,19 @@ from cachetools import TTLCache
 
 from app.core.config import settings
 from app.core.redis_client import get_client as get_redis
-from app.services.ml.predictor import predictor
-from app.services.url_features import get_risk_factors
+from app.services.browser_analyzer import BrowserResult, browser_analyzer
 from app.services.domain_reputation import (
-    compute_domain_trust,
-    get_registered_domain,
-    get_full_domain,
-    normalize_hostname,
-    ReputationTier,
     KNOWN_SHORTENERS,
+    ReputationTier,
+    compute_domain_trust,
+    get_full_domain,
+    get_registered_domain,
+    normalize_hostname,
 )
+from app.services.ml.predictor import predictor
 from app.services.network_inspector import network_inspector
-from app.services.browser_analyzer import browser_analyzer, BrowserResult
+from app.services.tranco_client import get_tranco_dampening
+from app.services.url_features import get_risk_factors
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class URLAnalyzer:
         path = parsed.path
 
         # ── 3. SSRF Pre-Check (security gate — always runs) ──
-        from app.services.network_inspector import _is_private_or_reserved, NetworkResult
+        from app.services.network_inspector import _is_private_or_reserved
         loop = asyncio.get_running_loop()
         try:
             initial_host = urlparse(url if "://" in url else f"https://{url}").hostname or ""
@@ -168,12 +169,24 @@ class URLAnalyzer:
             dns_ttl=net.dns.ttl,
             dns_flags=net.dns.flags,
         )
-        dampened_ml = ml_score * reputation.dampening_factor
+
+        # ── 6b. Tranco rank override ──
+        # For domains ranked in the global top 100k, Tranco provides a
+        # stronger trust signal than computed heuristics. Auth-bait paths
+        # do NOT remove Tranco dampening — google.com/login is legitimate.
+        tranco_dampening = await get_tranco_dampening(registered_domain)
+        effective_dampening = (
+            tranco_dampening if tranco_dampening is not None
+            else reputation.dampening_factor
+        )
+        dampened_ml = ml_score * effective_dampening
 
         logger.info(
-            "ML=%.3f (xgb=%.3f) × trust_dampen=%.2f → %.3f  [%s / %s]",
+            "ML=%.3f (xgb=%.3f) × dampen=%.2f%s → %.3f  [%s / %s]",
             ml_score, xgb_score,
-            reputation.dampening_factor, dampened_ml,
+            effective_dampening,
+            " (tranco)" if tranco_dampening is not None else "",
+            dampened_ml,
             reputation.tier.value, registered_domain,
         )
 
@@ -241,7 +254,8 @@ class URLAnalyzer:
                     "registered_domain": registered_domain,
                     "full_domain": full_domain,
                     "reputation_tier": reputation.tier.value,
-                    "dampening_factor": reputation.dampening_factor,
+                    "dampening_factor": effective_dampening,
+                    "tranco_dampening": tranco_dampening,
                     "trust_description": reputation.description,
                     "age_days": net.whois.age_days,
                     "registrar": net.whois.registrar,
