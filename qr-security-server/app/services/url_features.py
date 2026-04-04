@@ -7,18 +7,20 @@ The feature names and their order are verified against feature_names.json at sta
 """
 
 import ipaddress
-import re
 import math
-from urllib.parse import urlparse, parse_qs, unquote
+import re
 from collections import Counter
+from urllib.parse import parse_qs, unquote, urlparse
 
 import tldextract
 
 from app.services.homograph_detector import (
-    extract_homograph_features,
     BRAND_DOMAINS as _BRAND_DOMAINS,
+)
+from app.services.homograph_detector import (
     _brand_in_label,
     _hostname_has_brand,
+    extract_homograph_features,
 )
 
 # Set of official brand domains used for strict "is official" checks
@@ -150,10 +152,18 @@ def bigram_score(text: str) -> float:
 
 def extract_features(url: str) -> dict:
     """
-    Extract 59 features from a single URL.
+    Extract URL features for ML prediction and risk-factor scoring.
 
-    CRITICAL: This function must produce features identical to the training
-    notebook. Do not modify without updating the notebook as well.
+    Produces 59 URL features total:
+    - 45 are used directly by the XGBoost model (listed in feature_names.json)
+    - 14 were near-constant across the training corpus and were dropped during
+      training; they are retained here for the heuristic risk-factor system.
+
+    The full feature set (URL + browser) is 92 raw → 73 model features after
+    the near-constant and correlation filters applied in the training notebook.
+
+    CRITICAL: Do not remove or rename features without updating the training
+    notebook and regenerating feature_names.json.
     """
     f = {}
     url = str(url).strip()
