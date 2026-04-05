@@ -19,7 +19,7 @@ Academic references:
 import logging
 import math
 from enum import Enum
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 try:
@@ -134,7 +134,7 @@ def _sigmoid(x: float, k: float = 1.0, x0: float = 0.0) -> float:
     return 1.0 / (1.0 + math.exp(-k * (x - x0)))
 
 
-def _whois_trust(age_days: Optional[int]) -> float:
+def _whois_trust(age_days: int | None) -> float:
     """
     Compute 0–1 trust from domain age.
 
@@ -155,10 +155,10 @@ def _whois_trust(age_days: Optional[int]) -> float:
 
 
 def _ssl_trust(
-    valid: Optional[bool],
-    cert_age_days: Optional[int],
-    days_until_expiry: Optional[int],
-    error: Optional[str],
+    valid: bool | None,
+    cert_age_days: int | None,
+    days_until_expiry: int | None,
+    error: str | None,
 ) -> float:
     """
     Compute 0–1 trust from SSL certificate properties.
@@ -192,8 +192,8 @@ def _ssl_trust(
 
 
 def _dns_trust(
-    resolved: Optional[bool],
-    ttl: Optional[int],
+    resolved: bool | None,
+    ttl: int | None,
     flags: list[str],
 ) -> float:
     """
@@ -264,14 +264,14 @@ def _auth_bait_penalty(url_path: str) -> float:
 def compute_domain_trust(
     hostname: str,
     url_path: str = "",
-    whois_age_days: Optional[int] = None,
-    ssl_valid: Optional[bool] = None,
-    ssl_cert_age_days: Optional[int] = None,
-    ssl_days_until_expiry: Optional[int] = None,
-    ssl_error: Optional[str] = None,
-    dns_resolved: Optional[bool] = None,
-    dns_ttl: Optional[int] = None,
-    dns_flags: Optional[list[str]] = None,
+    whois_age_days: int | None = None,
+    ssl_valid: bool | None = None,
+    ssl_cert_age_days: int | None = None,
+    ssl_days_until_expiry: int | None = None,
+    ssl_error: str | None = None,
+    dns_resolved: bool | None = None,
+    dns_ttl: int | None = None,
+    dns_flags: list[str] | None = None,
 ) -> ReputationInfo:
     """
     Compute a domain trust score from observable network signals.

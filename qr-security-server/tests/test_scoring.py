@@ -263,11 +263,11 @@ def test_decide_hard_override_ssrf_check_failed():
     assert status == "danger"
 
 
-def test_decide_hard_override_5xx_status():
+def test_decide_5xx_status_is_suspicious():
     net = _clean_net()
     net.http.status_code = 503
     status, _ = _decide(0.0, net=net)
-    assert status == "suspicious"
+    assert status == "suspicious"  # incomplete verdict, not confirmed malicious
 
 
 def test_decide_4xx_not_a_hard_override():

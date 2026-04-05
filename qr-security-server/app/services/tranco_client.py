@@ -95,7 +95,7 @@ async def _fetch_rank(domain: str) -> int | None:
     url = _TRANCO_API.format(domain=domain)
     try:
         async with aiohttp.ClientSession() as session, session.get(
-            url, timeout=aiohttp.ClientTimeout(total=3)
+            url, timeout=aiohttp.ClientTimeout(connect=2, total=5)
         ) as resp:
             if resp.status != 200:
                 logger.debug("Tranco API returned %d for %s", resp.status, domain)

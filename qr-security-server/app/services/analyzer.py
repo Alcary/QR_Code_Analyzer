@@ -21,6 +21,7 @@ Analysis pipeline:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -96,6 +97,9 @@ class URLAnalyzer:
         full_domain = get_full_domain(hostname)
         path = parsed.path
 
+        # Start Tranco lookup immediately — result not needed until after browser/network
+        tranco_task = asyncio.ensure_future(get_tranco_dampening(registered_domain))
+
         # ── 3. SSRF Pre-Check (security gate — always runs) ──
         from app.services.network_inspector import _is_private_or_reserved
         loop = asyncio.get_running_loop()
@@ -108,8 +112,9 @@ class URLAnalyzer:
                 logger.warning("SSRF blocked: %s resolves to private/reserved IP", initial_host)
                 return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
         except Exception as exc:
-            logger.warning("SSRF pre-check failed for %s: %s", url, exc)
-            return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
+            # Pre-check executor failure (e.g. thread pool shutdown) — not SSRF confirmation.
+            # Fall through to normal analysis; network_inspector has its own SSRF handling.
+            logger.warning("SSRF pre-check executor error for %s: %s", url, exc)
 
         # ── 4. Browser Analysis (primary) + Network Checks ──
         # Strategy:
@@ -174,7 +179,7 @@ class URLAnalyzer:
         # For domains ranked in the global top 100k, Tranco provides a
         # stronger trust signal than computed heuristics. Auth-bait paths
         # do NOT remove Tranco dampening — google.com/login is legitimate.
-        tranco_dampening = await get_tranco_dampening(registered_domain)
+        tranco_dampening = await tranco_task
         effective_dampening = (
             tranco_dampening if tranco_dampening is not None
             else reputation.dampening_factor
@@ -286,28 +291,44 @@ class URLAnalyzer:
     # Cache helpers (Redis primary, in-memory fallback)
     # ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _cache_key(url: str) -> str:
+        """
+        Derive a fixed-length Redis key from a URL.
+
+        Using the raw URL as a key is unsafe: an attacker can submit
+        arbitrarily long unique URLs to fill Redis key space (cache-fill
+        DoS). SHA-256 produces a 64-character hex string regardless of
+        URL length, and collision probability is negligible in practice.
+        The in-memory TTLCache is also keyed by the digest so both
+        backends stay consistent.
+        """
+        return "scan:" + hashlib.sha256(url.encode()).hexdigest()
+
     async def _cache_get(self, url: str) -> dict | None:
+        key = self._cache_key(url)
         redis = get_redis()
         if redis is not None:
             try:
-                raw = await redis.get(f"scan:{url}")
+                raw = await redis.get(key)
                 if raw:
                     return json.loads(raw)
             except Exception as e:
                 logger.warning("Redis cache get failed: %s", e)
         # Fallback to local cache
-        return self._local_cache.get(url)
+        return self._local_cache.get(key)
 
     async def _cache_set(self, url: str, result: dict) -> None:
+        key = self._cache_key(url)
         redis = get_redis()
         if redis is not None:
             try:
-                await redis.setex(f"scan:{url}", self._cache_ttl, json.dumps(result))
+                await redis.setex(key, self._cache_ttl, json.dumps(result))
                 return
             except Exception as e:
                 logger.warning("Redis cache set failed: %s", e)
         # Fallback to local cache
-        self._local_cache[url] = result
+        self._local_cache[key] = result
 
     # ──────────────────────────────────────────────────────────
     # Network Risk Scoring
@@ -466,6 +487,7 @@ class URLAnalyzer:
             "has_js_obfuscation": (
                 br.has_eval_usage or br.has_atob_eval
                 or br.has_document_write or br.has_fromcharcode
+                or br.has_unescape
             ),
             "disables_right_click": br.disables_right_click,
             "iframe_count": br.iframe_count,
