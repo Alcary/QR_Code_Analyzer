@@ -58,4 +58,8 @@ qr-security-server/models/*.json
 # === Expo root-level artifacts ===
 .expo/
 
+# === Claude files ===
 .claude
+
+# === Feature Checkpoints for Machine Learning ===
+features_checkpoint.npz

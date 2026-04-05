@@ -11,7 +11,7 @@ from app.api.endpoints import scan, health
 from app.api.middleware import RequestLoggingMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
-from app.core.redis_client import get_client as get_redis, setup_redis, close_redis
+from app.core.redis_client import get_client as get_redis, setup_redis, close_redis, load_script
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -62,6 +62,9 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window = window_seconds
         self._requests: dict[str, list[float]] = defaultdict(list)
+        # SHA1 of _RATE_LIMIT_SCRIPT registered via SCRIPT LOAD at startup.
+        # Set by the lifespan handler after Redis connects; None until then.
+        self._script_sha: str | None = None
 
     async def is_allowed(self, client_ip: str) -> bool:
         redis = get_redis()
@@ -77,23 +80,52 @@ class RateLimiter:
 
     # ── Redis implementation ──────────────────────────────────
 
+    # Lua script executed atomically by Redis (single-threaded; no interleaving).
+    # Returns 1 if the request is allowed (and has been recorded), 0 if denied.
+    # Using a script avoids the TOCTOU race that a non-transactional pipeline has:
+    # with plain pipelining two concurrent requests can both read the same ZCARD
+    # result and both pass the limit, effectively bypassing it.
+    _RATE_LIMIT_SCRIPT = """
+        local key          = KEYS[1]
+        local window_start = tonumber(ARGV[1])
+        local now          = ARGV[2]
+        local max_requests = tonumber(ARGV[3])
+        local window_ttl   = tonumber(ARGV[4])
+
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
+        local count = redis.call('ZCARD', key)
+        if count < max_requests then
+            redis.call('ZADD', key, now, now)
+            redis.call('EXPIRE', key, window_ttl)
+            return 1
+        end
+        return 0
+    """
+
     async def _redis_is_allowed(self, redis, client_ip: str) -> bool:
         key = f"rate:{client_ip}"
         now = time.time()
         window_start = now - self.window
+        args = (1, key, window_start, now, self.max_requests, self.window)
         try:
-            pipe = redis.pipeline()
-            # Remove timestamps outside the current window
-            await pipe.zremrangebyscore(key, "-inf", window_start)
-            # Count remaining requests in window
-            await pipe.zcard(key)
-            # Add current request timestamp
-            await pipe.zadd(key, {str(now): now})
-            # Reset TTL so the key expires after the window
-            await pipe.expire(key, self.window)
-            results = await pipe.execute()
-            count_before = results[1]
-            return count_before < self.max_requests
+            if self._script_sha is not None:
+                try:
+                    # Fast path: script already cached in Redis by its SHA1.
+                    # Saves Redis from parsing/compiling the script on every call.
+                    result = await redis.evalsha(self._script_sha, *args)
+                    return bool(result)
+                except Exception as e:
+                    # NOSCRIPT means Redis lost the script (e.g. after a restart
+                    # or SCRIPT FLUSH). Fall through to EVAL to re-execute, then
+                    # reload the SHA for subsequent requests.
+                    if "NOSCRIPT" not in str(e):
+                        raise
+                    logger.warning("Redis: NOSCRIPT — reloading rate-limit script")
+                    self._script_sha = await load_script(self._RATE_LIMIT_SCRIPT)
+
+            # Fallback: send full script text (also used before SHA is registered)
+            result = await redis.eval(self._RATE_LIMIT_SCRIPT, *args)
+            return bool(result)
         except Exception as e:
             logger.warning("Redis rate limit check failed: %s — falling back to allow", e)
             return True
@@ -157,6 +189,7 @@ async def lifespan(app: FastAPI):
 
     # ── Redis ─────────────────────────────────────────────────────
     await setup_redis(settings.REDIS_URL)
+    rate_limiter._script_sha = await load_script(rate_limiter._RATE_LIMIT_SCRIPT)
 
     from app.services.ml.predictor import predictor  # noqa: F401
 

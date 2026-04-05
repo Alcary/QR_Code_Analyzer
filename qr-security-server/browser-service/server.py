@@ -47,41 +47,54 @@ _PRIVATE_NETS = [
 ]
 
 
-def _is_ssrf_target(url: str) -> bool:
+def _resolves_to_private(host: str) -> bool:
+    """
+    Blocking DNS lookup + private-range check.  Must only be called from
+    a worker thread (via asyncio.to_thread), never directly on the event loop.
+    """
+    resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    for _, _, _, _, sockaddr in resolved:
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+            if any(addr in net for net in _PRIVATE_NETS):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+async def _is_ssrf_target(url: str) -> bool:
     """
     Return True if the request URL resolves to a private / reserved address.
 
-    Called synchronously inside Playwright's route handler.  Uses a
-    short-timeout blocking DNS lookup — acceptable here because each
-    page analysis runs in its own thread-isolated context and the
-    lookup is bounded.
+    Called from the async Playwright route handler.
 
-    Returns False (allow) if the hostname cannot be parsed or resolved,
-    so legitimate pages are never accidentally blocked by DNS hiccups.
+    Raw IPs are checked with pure computation (no I/O).  Hostnames require
+    a DNS lookup, which is offloaded to a thread via asyncio.to_thread so
+    the event loop is never blocked — a page with many sub-resources would
+    otherwise stall the loop once per request intercepted.
+
+    Returns False (allow) on any parse or resolution error so that DNS
+    hiccups never accidentally block legitimate pages.
     """
     try:
         parsed = urlparse(url)
         host = parsed.hostname
         if not host:
             return False
-        # Raw IP — check directly without DNS
+
+        # Raw IP — pure computation, no I/O
         try:
             addr = ipaddress.ip_address(host)
             return any(addr in net for net in _PRIVATE_NETS)
         except ValueError:
             pass
-        # Hostname — resolve and check
-        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for _, _, _, _, sockaddr in resolved:
-            try:
-                addr = ipaddress.ip_address(sockaddr[0])
-                if any(addr in net for net in _PRIVATE_NETS):
-                    return True
-            except ValueError:
-                continue
+
+        # Hostname — resolve in a thread to avoid blocking the event loop
+        return await asyncio.to_thread(_resolves_to_private, host)
+
     except Exception:
-        pass
-    return False
+        return False
 
 
 # ── Feature Extraction ───────────────────────────────────────
@@ -117,10 +130,10 @@ async def extract_features(page, url: str) -> dict:
     def on_page_error(err):
         js_errors.append(str(err)[:200])
 
-    def on_dialog(dialog):
+    async def on_dialog(dialog):
         nonlocal popup_count
         popup_count += 1
-        asyncio.ensure_future(dialog.dismiss())
+        await dialog.dismiss()
 
     def on_response(resp):
         if resp.request.is_navigation_request() and 300 <= resp.status < 400:
@@ -566,7 +579,7 @@ async def handle_analyze(request: web.Request) -> web.Response:
 
         async def _route_handler(route):
             req_url = route.request.url
-            if _is_ssrf_target(req_url):
+            if await _is_ssrf_target(req_url):
                 logger.debug("Blocked SSRF sub-request: %s", req_url[:120])
                 await route.abort()
                 return
@@ -588,7 +601,10 @@ async def handle_analyze(request: web.Request) -> web.Response:
         )
     finally:
         if context:
-            await context.close()
+            try:
+                await context.close()
+            except Exception as close_err:
+                logger.warning("Failed to close browser context: %s", close_err)
 
 
 async def handle_health(request: web.Request) -> web.Response:

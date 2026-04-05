@@ -208,16 +208,31 @@ class ContainerManager:
         # the Docker SDK and never stop the container on shutdown.
         self._externally_managed = False
 
-    def _get_client(self):
-        """Lazy-init Docker client."""
-        if self._client is None:
-            try:
-                import docker
-                self._client = docker.from_env()
-                self._client.ping()
-            except Exception as e:
-                logger.warning("Docker is not available: %s", e)
-                self._client = None
+    async def _get_client(self):
+        """
+        Lazy-init Docker client, offloading the blocking socket connection
+        and ping to a thread so the event loop is never stalled.
+
+        docker.from_env() opens a Unix socket and docker.ping() sends a
+        network request to the Docker daemon — both can block for hundreds
+        of milliseconds on a slow or cold daemon.
+        """
+        if self._client is not None:
+            return self._client
+
+        loop = asyncio.get_running_loop()
+
+        def _init_docker():
+            import docker
+            client = docker.from_env()
+            client.ping()
+            return client
+
+        try:
+            self._client = await loop.run_in_executor(None, _init_docker)
+        except Exception as e:
+            logger.warning("Docker is not available: %s", e)
+            self._client = None
         return self._client
 
     def _find_browser_service_dir(self) -> Path | None:
@@ -252,7 +267,7 @@ class ContainerManager:
             )
             return True
 
-        client = self._get_client()
+        client = await self._get_client()
         if client is None:
             logger.warning("Docker not available — browser analysis will use external service or be skipped")
             return False
@@ -347,7 +362,7 @@ class ContainerManager:
             logger.info("Browser service is externally managed — skipping container stop")
             return
 
-        client = self._get_client()
+        client = await self._get_client()
         if client is None:
             return
 
