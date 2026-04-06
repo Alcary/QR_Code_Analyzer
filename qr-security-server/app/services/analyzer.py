@@ -112,9 +112,10 @@ class URLAnalyzer:
                 logger.warning("SSRF blocked: %s resolves to private/reserved IP", initial_host)
                 return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
         except Exception as exc:
-            # Pre-check executor failure (e.g. thread pool shutdown) — not SSRF confirmation.
-            # Fall through to normal analysis; network_inspector has its own SSRF handling.
-            logger.warning("SSRF pre-check executor error for %s: %s", url, exc)
+            # Pre-check executor failure — cannot confirm safety, so block.
+            # Failing open here would let a private-IP URL bypass the SSRF gate.
+            logger.warning("SSRF pre-check failed for %s (%s) — blocking for safety", url, exc)
+            return self._result("danger", "SSRF pre-check failed — blocked for safety", risk_score=1.0)
 
         # ── 4. Browser Analysis (primary) + Network Checks ──
         # Strategy:
@@ -264,6 +265,7 @@ class URLAnalyzer:
                     "trust_description": reputation.description,
                     "age_days": net.whois.age_days,
                     "registrar": net.whois.registrar,
+                    "whois_lookup_failed": net.whois.lookup_failed,
                 },
                 "network": {
                     "dns_resolved": net.dns.resolved,

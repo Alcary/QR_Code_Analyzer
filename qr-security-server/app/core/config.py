@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
 
 class Settings(BaseSettings):
@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     # ── Authentication ────────────────────────────────────────
     # Set via API_KEY env var or .env file. Leave empty to disable (dev mode).
     API_KEY: str = ""
+
+    @field_validator("API_KEY")
+    @classmethod
+    def validate_api_key_length(cls, v: str) -> str:
+        if v and len(v) < 32:
+            raise ValueError(
+                f"API_KEY is too short ({len(v)} chars) — minimum 32 characters. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        return v
 
     # ── CORS ──────────────────────────────────────────────────
     # In production, restrict to your mobile app's origin.

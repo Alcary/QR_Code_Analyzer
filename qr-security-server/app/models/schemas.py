@@ -25,7 +25,7 @@ class ScanRequest(BaseModel):
                     f"Unsupported scheme '{scheme}'. Allowed: {settings.ALLOWED_SCHEMES}"
                 )
             # Also reject schemes that omit the // authority (e.g. data:, mailto:)
-            m = re.match(r"^([a-zA-Z][a-zA-Z0-9+\-.]*):(?!//)" , v)
+            m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):(?!//)", v)
             if m:
                 scheme = m.group(1).lower()
                 raise ValueError(
@@ -78,6 +78,7 @@ class DomainDetails(BaseModel):
     trust_description: str | None = None
     age_days: int | None = None
     registrar: str | None = None
+    whois_lookup_failed: bool = False
 
 
 class BrowserDetails(BaseModel):

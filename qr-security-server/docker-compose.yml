@@ -41,6 +41,7 @@ services:
     environment:
       - PAGE_TIMEOUT_MS=12000
       - PORT=3000
+      - MAX_CONCURRENT=5
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
       interval: 10s
