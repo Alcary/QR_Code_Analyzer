@@ -13,40 +13,15 @@ interface TrustIndicatorProps {
 function getTierConfig(tier: string) {
   switch (tier) {
     case 'trusted':
-      return {
-        color: colors.success,
-        bg: colors.safeBg,
-        icon: 'checkmark-circle' as const,
-        label: 'Trusted Domain',
-      };
+      return { color: colors.success, icon: 'checkmark-circle' as const, label: 'Trusted Domain' };
     case 'moderate':
-      return {
-        color: '#30B0C7',
-        bg: 'rgba(48, 176, 199, 0.10)',
-        icon: 'shield-half' as const,
-        label: 'Moderate Trust',
-      };
+      return { color: '#30B0C7', icon: 'shield-half' as const, label: 'Moderate Trust' };
     case 'neutral':
-      return {
-        color: colors.warning,
-        bg: colors.warningBg,
-        icon: 'help-circle' as const,
-        label: 'Limited Trust',
-      };
+      return { color: colors.warning, icon: 'help-circle' as const, label: 'Limited Trust' };
     case 'untrusted':
-      return {
-        color: colors.error,
-        bg: colors.dangerBg,
-        icon: 'close-circle' as const,
-        label: 'Low Trust',
-      };
+      return { color: colors.error, icon: 'close-circle' as const, label: 'Low Trust' };
     default:
-      return {
-        color: colors.textSecondary,
-        bg: '#F0F0F0',
-        icon: 'ellipsis-horizontal-circle' as const,
-        label: 'Unknown',
-      };
+      return { color: colors.textSecondary, icon: 'ellipsis-horizontal-circle' as const, label: 'Unknown' };
   }
 }
 
@@ -63,59 +38,87 @@ export default function TrustIndicator({ tier, description, ageDays, registrar }
   const age = formatAge(ageDays);
 
   return (
-    <View style={[styles.container, { backgroundColor: config.bg, borderColor: `${config.color}30` }]}>
-      <View style={styles.headerRow}>
-        <Ionicons name={config.icon} size={20} color={config.color} />
-        <Text style={[styles.tierLabel, { color: config.color }]}>{config.label}</Text>
-      </View>
+    <View style={styles.card}>
+      {/* Colored left accent bar */}
+      <View style={[styles.accent, { backgroundColor: config.color }]} />
 
-      {description && (
-        <Text style={styles.description} numberOfLines={2}>{description}</Text>
-      )}
+      <View style={styles.content}>
+        {/* Tier badge pill */}
+        <View style={[styles.tierBadge, { backgroundColor: `${config.color}18` }]}>
+          <Ionicons name={config.icon} size={15} color={config.color} />
+          <Text style={[styles.tierLabel, { color: config.color }]}>{config.label}</Text>
+        </View>
 
-      <View style={styles.metaRow}>
-        {age && (
-          <View style={styles.metaItem}>
-            <Ionicons name="calendar-outline" size={13} color={colors.textSecondary} />
-            <Text style={styles.metaText}>{age}</Text>
+        {description ? (
+          <Text style={styles.description}>{description}</Text>
+        ) : null}
+
+        {(age || registrar) ? (
+          <View style={styles.metaRow}>
+            {age ? (
+              <View style={styles.metaItem}>
+                <Ionicons name="calendar-outline" size={12} color={colors.textSecondary} />
+                <Text style={styles.metaText}>{age}</Text>
+              </View>
+            ) : null}
+            {registrar ? (
+              <View style={styles.metaItem}>
+                <Ionicons name="business-outline" size={12} color={colors.textSecondary} />
+                <Text style={styles.metaText} numberOfLines={1}>{registrar}</Text>
+              </View>
+            ) : null}
           </View>
-        )}
-        {registrar && (
-          <View style={styles.metaItem}>
-            <Ionicons name="business-outline" size={13} color={colors.textSecondary} />
-            <Text style={styles.metaText} numberOfLines={1}>{registrar}</Text>
-          </View>
-        )}
+        ) : null}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  card: {
+    flexDirection: 'row',
+    backgroundColor: colors.white,
     borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.cardBorder,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  headerRow: {
+  accent: {
+    width: 4,
+    alignSelf: 'stretch',
+  },
+  content: {
+    flex: 1,
+    padding: 12,
+    gap: 6,
+  },
+  tierBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
+    alignSelf: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
   },
   tierLabel: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   description: {
     fontSize: 13,
     color: colors.textSecondary,
     lineHeight: 18,
-    marginBottom: 8,
   },
   metaRow: {
     flexDirection: 'row',
-    gap: 16,
+    flexWrap: 'wrap',
+    gap: 14,
   },
   metaItem: {
     flexDirection: 'row',
@@ -125,6 +128,6 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 12,
     color: colors.textSecondary,
-    maxWidth: 140,
+    maxWidth: 160,
   },
 });
