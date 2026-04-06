@@ -123,6 +123,10 @@ class WHOISResult:
     registrar: str | None = None
     is_new_domain: bool | None = None
     error: str | None = None
+    # True when the lookup failed (timeout, network error, library missing).
+    # False means either a successful lookup or a lookup that returned no date.
+    # Distinguishes "WHOIS service unreachable" from "domain has no age data".
+    lookup_failed: bool = False
 
 
 @dataclass
@@ -168,7 +172,7 @@ class NetworkInspector:
         net.dns = results[0] if isinstance(results[0], DNSResult) else DNSResult(error=str(results[0]))
         net.ssl = results[1] if isinstance(results[1], SSLResult) else SSLResult(error=str(results[1]))
         net.http = results[2] if isinstance(results[2], HTTPResult) else HTTPResult(error=str(results[2]))
-        net.whois = results[3] if isinstance(results[3], WHOISResult) else WHOISResult(error=str(results[3]))
+        net.whois = results[3] if isinstance(results[3], WHOISResult) else WHOISResult(error=str(results[3]), lookup_failed=True)
         return net
 
     async def inspect_without_http(
@@ -199,7 +203,7 @@ class NetworkInspector:
         net = NetworkResult()
         net.dns = results[0] if isinstance(results[0], DNSResult) else DNSResult(error=str(results[0]))
         net.ssl = results[1] if isinstance(results[1], SSLResult) else SSLResult(error=str(results[1]))
-        net.whois = results[2] if isinstance(results[2], WHOISResult) else WHOISResult(error=str(results[2]))
+        net.whois = results[2] if isinstance(results[2], WHOISResult) else WHOISResult(error=str(results[2]), lookup_failed=True)
         # HTTP result left as default (empty) — browser handled content inspection
         return net
 
@@ -507,6 +511,7 @@ class NetworkInspector:
             import whois
         except ImportError:
             result.error = "whois_not_installed"
+            result.lookup_failed = True
             return result
 
         try:
@@ -531,10 +536,13 @@ class NetworkInspector:
 
         except asyncio.TimeoutError:
             result.error = "whois_timeout"
+            result.lookup_failed = True
         except asyncio.CancelledError:
             result.error = "whois_cancelled"
+            result.lookup_failed = True
         except Exception as e:
             result.error = str(e)[:120]
+            result.lookup_failed = True
 
         return result
 

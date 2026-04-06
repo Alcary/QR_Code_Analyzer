@@ -203,6 +203,12 @@ class ContainerManager:
             self.host_port = host_port
         # Lock: only one restart attempt at a time
         self._restart_lock = asyncio.Lock()
+        # Incremented each time a restart attempt completes (success or fail).
+        # Used as a generation sentinel so coroutines that queued on the lock
+        # can detect that a restart already happened and return its result
+        # without making a second HTTP health-check call inside the lock.
+        self._restart_generation: int = 0
+        self._last_restart_ok: bool = False
         # True when the service was already running before we started
         # (e.g. managed by docker-compose). In that case we never touch
         # the Docker SDK and never stop the container on shutdown.
@@ -407,13 +413,19 @@ class ContainerManager:
             )
             return False
 
+        # Multiple coroutines may have seen the container as unhealthy and be
+        # queued here simultaneously.  We use a generation counter so that
+        # coroutines that waited on the lock can return the restarting
+        # coroutine's result immediately — no HTTP call needed inside the lock.
+        captured_generation = self._restart_generation
         async with self._restart_lock:
-            # Re-check inside the lock — another coroutine may have already
-            # restarted the container while we were waiting to acquire it.
-            if await self._is_healthy():
-                return True
+            if self._restart_generation != captured_generation:
+                # Another coroutine completed a restart while we were waiting.
+                return self._last_restart_ok
             logger.warning("Browser container is not healthy — restarting...")
-            return await self.start()
+            self._last_restart_ok = await self.start()
+            self._restart_generation += 1
+            return self._last_restart_ok
 
     async def _is_healthy(self) -> bool:
         """Quick HTTP health check against the browser service."""

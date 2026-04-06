@@ -1,3 +1,5 @@
+import asyncio
+import ipaddress
 import logging
 from contextlib import asynccontextmanager
 from collections import defaultdict
@@ -15,6 +17,48 @@ from app.core.redis_client import get_client as get_redis, setup_redis, close_re
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def _strip_port(addr: str) -> str:
+    """
+    Return a bare IP string from a single X-Forwarded-For hop, stripping any
+    port suffix.  Handles all four common formats:
+
+      Bare IPv4            "203.0.113.5"        → "203.0.113.5"
+      IPv4 with port       "203.0.113.5:8080"   → "203.0.113.5"
+      Bare IPv6            "2001:db8::1" / "::1" → unchanged
+      Bracketed IPv6       "[::1]" / "[::1]:8080" → "::1"
+
+    The previous approach (`":" in ip and not ip.startswith("[")`) mangled bare
+    IPv6 addresses: `"::1".rpartition(":")` produced `":"`, breaking rate-limit
+    key generation for all IPv6 clients.
+    """
+    addr = addr.strip()
+
+    # Fast path: already a valid bare IP (IPv4 or IPv6, no port)
+    try:
+        return str(ipaddress.ip_address(addr))
+    except ValueError:
+        pass
+
+    # Bracketed IPv6: "[addr]" or "[addr]:port"
+    if addr.startswith("["):
+        end = addr.find("]")
+        if end != -1:
+            try:
+                return str(ipaddress.ip_address(addr[1:end]))
+            except ValueError:
+                pass
+
+    # IPv4 with port — exactly one colon means "host:port"
+    if addr.count(":") == 1:
+        host, _, _ = addr.rpartition(":")
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+
+    return addr
 
 
 def _get_client_ip(request: Request) -> str:
@@ -37,9 +81,7 @@ def _get_client_ip(request: Request) -> str:
         if xff:
             hops = [h.strip() for h in xff.split(",") if h.strip()]
             idx = max(0, len(hops) - settings.TRUSTED_PROXY_COUNT - 1)
-            ip = hops[idx]
-            if ":" in ip and not ip.startswith("["):
-                ip, _, _ = ip.rpartition(":")
+            ip = _strip_port(hops[idx])
             if ip:
                 return ip
     return request.client.host if request.client else "unknown"
@@ -65,6 +107,10 @@ class RateLimiter:
         # SHA1 of _RATE_LIMIT_SCRIPT registered via SCRIPT LOAD at startup.
         # Set by the lifespan handler after Redis connects; None until then.
         self._script_sha: str | None = None
+        # Serialises script reloads so that when many requests race on a
+        # NOSCRIPT error only one coroutine calls SCRIPT LOAD; the rest see
+        # the updated SHA and skip the redundant round-trip.
+        self._script_reload_lock = asyncio.Lock()
 
     async def is_allowed(self, client_ip: str) -> bool:
         redis = get_redis()
@@ -116,19 +162,37 @@ class RateLimiter:
                     return bool(result)
                 except Exception as e:
                     # NOSCRIPT means Redis lost the script (e.g. after a restart
-                    # or SCRIPT FLUSH). Fall through to EVAL to re-execute, then
-                    # reload the SHA for subsequent requests.
+                    # or SCRIPT FLUSH). Reload the SHA under a lock so that
+                    # concurrent requests don't race — only one calls SCRIPT LOAD.
                     if "NOSCRIPT" not in str(e):
                         raise
                     logger.warning("Redis: NOSCRIPT — reloading rate-limit script")
-                    self._script_sha = await load_script(self._RATE_LIMIT_SCRIPT)
+                    await self._reload_script()
+                    # Fall through to EVAL for this request; the refreshed SHA
+                    # is picked up by the fast path on subsequent requests.
 
-            # Fallback: send full script text (also used before SHA is registered)
+            # Fallback: send full script text (used before SHA is registered
+            # and immediately after a NOSCRIPT reload).
             result = await redis.eval(self._RATE_LIMIT_SCRIPT, *args)
             return bool(result)
         except Exception as e:
             logger.warning("Redis rate limit check failed: %s — falling back to allow", e)
             return True
+
+    async def _reload_script(self) -> None:
+        """
+        Reload the rate-limit Lua script into Redis, serialised by a lock.
+
+        Uses the stale SHA as a sentinel: if the SHA changed while we waited
+        for the lock, another coroutine already reloaded it and we skip the
+        redundant SCRIPT LOAD round-trip.
+        """
+        stale_sha = self._script_sha
+        async with self._script_reload_lock:
+            if self._script_sha != stale_sha:
+                # Another coroutine reloaded while we were queued on the lock.
+                return
+            self._script_sha = await load_script(self._RATE_LIMIT_SCRIPT)
 
     async def _redis_retry_after(self, redis, client_ip: str) -> int:
         key = f"rate:{client_ip}"

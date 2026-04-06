@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────
 PAGE_TIMEOUT_MS = int(os.environ.get("PAGE_TIMEOUT_MS", "12000"))
 PORT = int(os.environ.get("PORT", "3000"))
+# Maximum simultaneous page renders.  Each browser context uses ~50-100 MB,
+# so 5 fits comfortably within the container's 1 GB memory limit.
+# Should match BROWSER_MAX_CONCURRENT in the API server config.
+MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "5"))
 
 # Private / reserved ranges that sub-requests must never reach.
 _PRIVATE_NETS = [
@@ -451,6 +455,9 @@ _BRAND_OFFICIAL_DOMAINS = {
     "instagram": {"instagram.com"},
     "twitter": {"twitter.com", "x.com"},
     "linkedin": {"linkedin.com"},
+    "bank_of_america": {"bankofamerica.com"},
+    "chase": {"chase.com"},
+    "wells_fargo": {"wellsfargo.com"},
     "ebay": {"ebay.com"},
     "dropbox": {"dropbox.com"},
     "dhl": {"dhl.com"},
@@ -493,11 +500,13 @@ from aiohttp import web
 
 _browser = None
 _playwright = None
+_analyze_semaphore: asyncio.Semaphore | None = None
 
 
 async def startup(app):
     """Launch browser on server start."""
-    global _browser, _playwright
+    global _browser, _playwright, _analyze_semaphore
+    _analyze_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
     _playwright = await async_playwright().start()
     _browser = await _playwright.chromium.launch(
         args=[
@@ -552,7 +561,23 @@ async def handle_analyze(request: web.Request) -> web.Response:
 
     logger.info("Analyzing: %s", url[:120])
 
+    # Enforce concurrency limit — reject immediately when at capacity.
+    # locked() is synchronous (no yield point), so the check and acquire
+    # are effectively atomic within the single-threaded event loop.
+    if _analyze_semaphore is not None and _analyze_semaphore.locked():
+        logger.warning("At capacity (%d concurrent) — rejecting /analyze request", MAX_CONCURRENT)
+        return web.json_response(
+            {
+                "success": False,
+                "error": f"Server at capacity ({MAX_CONCURRENT} concurrent analyses). Retry shortly.",
+            },
+            status=503,
+            headers={"Retry-After": "5"},
+        )
+
     context = None
+    if _analyze_semaphore is not None:
+        await _analyze_semaphore.acquire()
     try:
         # Each analysis gets a fresh, isolated browser context
         context = await _browser.new_context(
@@ -605,6 +630,8 @@ async def handle_analyze(request: web.Request) -> web.Response:
                 await context.close()
             except Exception as close_err:
                 logger.warning("Failed to close browser context: %s", close_err)
+        if _analyze_semaphore is not None:
+            _analyze_semaphore.release()
 
 
 async def handle_health(request: web.Request) -> web.Response:

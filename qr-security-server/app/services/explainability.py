@@ -88,7 +88,9 @@ class SHAPExplainer:
 
             self._explainer = shap.TreeExplainer(raw_model)
             self._feature_names = feature_names
-            self._base_value = float(self._explainer.expected_value)
+            ev = self._explainer.expected_value
+            # Binary classification returns an array [base_class0, base_class1]
+            self._base_value = float(ev[1] if hasattr(ev, "__len__") else ev)
             self._ready = True
             logger.info(
                 "SHAP TreeExplainer initialised (base_value=%.4f, features=%d)",

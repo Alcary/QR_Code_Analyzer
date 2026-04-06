@@ -9,11 +9,15 @@ They exercise:
   - Graceful degradation when browser analysis fails
 """
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.browser_analyzer import (
     BrowserAnalyzer,
     BrowserResult,
+    ContainerManager,
     _map_page_features,
     _map_network_features,
     _map_redirect_features,
@@ -335,3 +339,100 @@ class TestMappingHelpers:
         assert r.detected_brands == ["paypal", "google"]
         assert r.brand_domain_mismatch is True
         assert r.impersonated_brand == "paypal"
+
+
+# ── ContainerManager.ensure_running — lock / generation counter ─
+
+
+class TestEnsureRunning:
+    """
+    Tests for the generation-counter restart serialisation in ensure_running().
+
+    All tests mock _is_healthy() and start() so no Docker daemon is needed.
+    """
+
+    def _manager(self) -> ContainerManager:
+        return ContainerManager()
+
+    @pytest.mark.asyncio
+    async def test_healthy_returns_true_without_restart(self):
+        """Fast path: healthy container never touches the lock or start()."""
+        mgr = self._manager()
+        with patch.object(mgr, "_is_healthy", AsyncMock(return_value=True)):
+            with patch.object(mgr, "start", AsyncMock()) as mock_start:
+                result = await mgr.ensure_running()
+
+        assert result is True
+        mock_start.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_triggers_restart(self):
+        """Unhealthy container causes start() to be called once."""
+        mgr = self._manager()
+        with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):
+            with patch.object(mgr, "start", AsyncMock(return_value=True)) as mock_start:
+                result = await mgr.ensure_running()
+
+        assert result is True
+        mock_start.assert_called_once()
+        assert mgr._restart_generation == 1
+        assert mgr._last_restart_ok is True
+
+    @pytest.mark.asyncio
+    async def test_restart_called_once_under_concurrent_requests(self):
+        """
+        Many coroutines seeing an unhealthy container simultaneously must
+        trigger exactly one restart — the generation counter prevents the
+        rest from calling start() redundantly.
+        """
+        mgr = self._manager()
+        start_calls = 0
+
+        async def fake_start():
+            nonlocal start_calls
+            start_calls += 1
+            await asyncio.sleep(0)  # yield so other coroutines can queue on the lock
+            return True
+
+        with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):
+            with patch.object(mgr, "start", side_effect=fake_start):
+                results = await asyncio.gather(
+                    *[mgr.ensure_running() for _ in range(10)]
+                )
+
+        assert start_calls == 1, f"Expected 1 start() call, got {start_calls}"
+        assert all(r is True for r in results)
+
+    @pytest.mark.asyncio
+    async def test_queued_coroutines_return_restart_result(self):
+        """
+        Coroutines that waited on the lock must return _last_restart_ok,
+        not attempt their own restart.
+        """
+        mgr = self._manager()
+
+        async def slow_start():
+            await asyncio.sleep(0)
+            return False  # restart failed
+
+        with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):
+            with patch.object(mgr, "start", side_effect=slow_start):
+                results = await asyncio.gather(
+                    *[mgr.ensure_running() for _ in range(5)]
+                )
+
+        assert all(r is False for r in results)
+        assert mgr._restart_generation == 1
+
+    @pytest.mark.asyncio
+    async def test_externally_managed_does_not_restart(self):
+        """Externally managed service: unhealthy returns False, never restarts."""
+        mgr = self._manager()
+        mgr._externally_managed = True
+        with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):
+            with patch.object(mgr, "start", AsyncMock()) as mock_start:
+                result = await mgr.ensure_running()
+
+        assert result is False
+        mock_start.assert_not_called()
+        assert mgr._restart_generation == 0

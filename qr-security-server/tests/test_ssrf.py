@@ -7,8 +7,10 @@ These are pure synchronous tests — no network calls needed.
 """
 
 import pytest
+from unittest.mock import patch
 
 from app.services.network_inspector import _is_private_or_reserved
+from app.services.analyzer import URLAnalyzer
 
 
 @pytest.mark.parametrize(
@@ -63,3 +65,22 @@ def test_is_private_or_reserved(addr: str, should_block: bool):
     assert result == should_block, (
         f"_is_private_or_reserved({addr!r}) returned {result}, expected {should_block}"
     )
+
+
+@pytest.mark.asyncio
+async def test_ssrf_precheck_exception_blocks_request():
+    """
+    If the SSRF pre-check raises (e.g. DNS resolution error, thread pool
+    shutdown), the analyzer must fail-safe and return danger — not fall
+    through to normal analysis without having verified the host.
+    """
+    _analyzer = URLAnalyzer(cache_maxsize=1, cache_ttl=1)
+
+    with patch(
+        "app.services.network_inspector._is_private_or_reserved",
+        side_effect=OSError("simulated resolution failure"),
+    ):
+        result = await _analyzer.analyze("http://example.com")
+
+    assert result["status"] == "danger"
+    assert result["risk_score"] == 1.0

@@ -82,3 +82,26 @@ def test_whitespace_only_rejected():
     # After stripping, the string is empty → min_length=1 triggers
     with pytest.raises(ValidationError):
         _v("   ")
+
+
+# ── authority-less scheme rejection (the `(?!//)` regex branch) ─
+
+def test_mailto_scheme_rejected():
+    # mailto: has no // — hits the regex branch, not the startswith branch
+    with pytest.raises(ValidationError) as exc:
+        _v("mailto:user@example.com")
+    assert "Unsupported scheme" in str(exc.value)
+
+
+def test_tel_scheme_rejected():
+    with pytest.raises(ValidationError) as exc:
+        _v("tel:+15551234567")
+    assert "Unsupported scheme" in str(exc.value)
+
+
+def test_hyphenated_scheme_rejected():
+    # Scheme names may contain hyphens (RFC 3986); the regex must capture them
+    # correctly.  coap+tcp: has no // so it goes through the regex branch.
+    with pytest.raises(ValidationError) as exc:
+        _v("coap+tcp:some-resource")
+    assert "Unsupported scheme" in str(exc.value)

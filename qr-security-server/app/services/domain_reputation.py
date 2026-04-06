@@ -248,13 +248,42 @@ def _structure_trust(hostname: str) -> float:
 def _auth_bait_penalty(url_path: str) -> float:
     """
     Return a penalty in [0, 0.30] if the URL path contains
-    authentication/credential-related keywords.
+    authentication/credential-related keywords as discrete path tokens.
+
+    Matching is done at the token level — path segments split on '/', '-',
+    and '_' — so substrings do not fire false positives:
+      /author         → no match  ('author' ≠ 'auth')
+      /authentication → no match  ('authentication' ≠ 'auth')
+      /api/auth       → match     ('auth' is a whole segment)
+      /my-account     → match     ('account' is a sub-part)
+      /sign-in        → match     ('sign-in' is a whole segment)
+
+    Hyphenated patterns ('sign-in', 'reset-password') are checked as whole
+    segments before falling through to sub-part checking, so 'reset-password'
+    scores once rather than twice (once as the pattern, once via 'password').
+
+    File extensions are stripped so 'login.php' matches 'login'.
     """
     if not url_path:
         return 0.0
-    path_lower = url_path.lower()
-    matches = sum(1 for p in AUTH_BAIT_PATTERNS if p in path_lower)
-    return min(matches * 0.10, 0.30)
+
+    matched: set[str] = set()
+    for segment in url_path.lower().split("/"):
+        if not segment:
+            continue
+        # Strip file extension: "login.php" → "login"
+        base = segment.split(".")[0] if "." in segment else segment
+        if base in AUTH_BAIT_PATTERNS:
+            # Whole segment matched — skip sub-parts to avoid double-counting
+            # e.g. "reset-password" should not also add "password"
+            matched.add(base)
+        else:
+            # Check hyphen/underscore sub-parts: "my-account" → ["my", "account"]
+            for part in base.replace("-", "_").split("_"):
+                if part and part in AUTH_BAIT_PATTERNS:
+                    matched.add(part)
+
+    return min(len(matched) * 0.10, 0.30)
 
 
 # ═══════════════════════════════════════════════════════════════

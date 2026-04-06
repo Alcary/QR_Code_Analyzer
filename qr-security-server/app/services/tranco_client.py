@@ -70,8 +70,9 @@ async def _get_rank(domain: str) -> int | None:
         try:
             cached = await redis.get(cache_key)
             if cached is not None:
-                val = cached.decode() if isinstance(cached, bytes) else str(cached)
-                return int(val) if val != "none" else None
+                # Redis client is created with decode_responses=True, so
+                # cached is always str. No bytes decoding needed.
+                return int(cached) if cached != "none" else None
         except Exception as exc:
             logger.warning("Tranco Redis get failed for %s: %s", domain, exc)
 
