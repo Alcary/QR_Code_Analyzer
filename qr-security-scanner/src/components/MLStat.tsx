@@ -20,9 +20,14 @@ const styles = StyleSheet.create({
   mlStatBox: {
     flex: 1,
     alignItems: "center",
-    backgroundColor: colors.card,
+    backgroundColor: colors.white,
     paddingVertical: 10,
     borderRadius: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 3,
+    elevation: 2,
   },
   mlStatValue: {
     fontSize: 16,

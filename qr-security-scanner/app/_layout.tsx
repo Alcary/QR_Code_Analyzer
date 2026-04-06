@@ -1,9 +1,11 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import ErrorBoundary from "../src/components/ErrorBoundary";
 
 export default function RootLayout() {
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <ErrorBoundary>
       <StatusBar
         barStyle="light-content"
@@ -33,5 +35,6 @@ export default function RootLayout() {
         />
       </Stack>
     </ErrorBoundary>
+    </GestureHandlerRootView>
   );
 }

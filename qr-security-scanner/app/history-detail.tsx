@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  LayoutAnimation,
   Linking,
   Modal,
   Platform,
@@ -57,8 +58,31 @@ const STATUS_CONFIG = {
   safe: { color: colors.success, label: "Safe", icon: "checkmark-circle" },
   suspicious: { color: colors.warning, label: "Suspicious", icon: "warning" },
   danger: { color: colors.error, label: "Danger", icon: "close-circle" },
-  info: { color: colors.primary, label: "Not Analyzed", icon: "information-circle" },
+  info: {
+    color: colors.primary,
+    label: "Not Analyzed",
+    icon: "information-circle",
+  },
 } as const;
+
+// ── Summary chip ──────────────────────────────────────────────
+
+function SummaryChip({ ok, label }: { ok: boolean | null; label: string }) {
+  const color =
+    ok === null ? colors.textSecondary : ok ? colors.success : colors.warning;
+  const icon =
+    ok === null
+      ? ("remove-circle-outline" as const)
+      : ok
+        ? ("checkmark-circle" as const)
+        : ("alert-circle" as const);
+  return (
+    <View style={[styles.chip, { backgroundColor: `${color}15` }]}>
+      <Ionicons name={icon} size={11} color={color} />
+      <Text style={[styles.chipText, { color }]}>{label}</Text>
+    </View>
+  );
+}
 
 // ── Screen ────────────────────────────────────────────────────
 
@@ -68,6 +92,7 @@ export default function HistoryDetailScreen() {
   const [item, setItem] = useState<HistoryItem | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -85,7 +110,9 @@ export default function HistoryDetailScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const url =
       item?.normalizedUrl ??
-      (item?.rawPayload ? parseQrPayload(item.rawPayload).normalizedUrl : null) ??
+      (item?.rawPayload
+        ? parseQrPayload(item.rawPayload).normalizedUrl
+        : null) ??
       normalizeWebUrl(item?.rawPayload);
     if (url) {
       const supported = await Linking.canOpenURL(url);
@@ -137,6 +164,18 @@ export default function HistoryDetailScreen() {
   const openableUrl = item.normalizedUrl ?? parsedPayload.normalizedUrl;
   const displayUrl =
     openableUrl ?? normalizeWebUrl(item.rawPayload) ?? item.rawPayload;
+  const hasDetails = !!(domain || network || ml || riskFactors.length > 0);
+  const domainOk = domain
+    ? ["trusted", "moderate"].includes(domain.reputation_tier)
+    : null;
+  const networkOk: boolean | null = network
+    ? !!(
+        network.dns_resolved &&
+        network.ssl_valid !== false &&
+        network.http_status != null &&
+        network.http_status < 400
+      )
+    : null;
 
   return (
     <View style={styles.root}>
@@ -202,7 +241,7 @@ export default function HistoryDetailScreen() {
       >
         {/* ─── Verdict ─── */}
         <View style={styles.verdictCard}>
-          <RiskScoreRing score={score} status={status} size={100} />
+          <RiskScoreRing score={score} status={status} size={84} />
           <View style={styles.verdictRight}>
             <View
               style={[
@@ -224,7 +263,7 @@ export default function HistoryDetailScreen() {
             </Text>
             {details?.analysis_time_ms != null && (
               <Text style={styles.timingText}>
-                Analysed in {details.analysis_time_ms}ms
+                Analysed in {(details.analysis_time_ms / 1000).toFixed(1)}s
               </Text>
             )}
           </View>
@@ -237,7 +276,9 @@ export default function HistoryDetailScreen() {
           </Text>
           <View style={styles.urlBox}>
             <Ionicons
-              name={item.normalizedUrl ? "globe-outline" : "document-text-outline"}
+              name={
+                item.normalizedUrl ? "globe-outline" : "document-text-outline"
+              }
               size={14}
               color={colors.textSecondary}
             />
@@ -276,147 +317,182 @@ export default function HistoryDetailScreen() {
           )}
         </View>
 
-        {/* ─── Risk Factors ─── */}
-        {riskFactors.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              Risk Factors ({riskFactors.length})
-            </Text>
-            {riskFactors.map((f, i) => {
-              const sc =
-                SEVERITY_CONFIG[f.severity as keyof typeof SEVERITY_CONFIG] ??
-                SEVERITY_CONFIG.low;
-              return (
-                <View key={i} style={styles.factorRow}>
-                  <View
-                    style={[styles.severityDot, { backgroundColor: sc.color }]}
-                  />
-                  <View style={styles.factorContent}>
-                    <Text style={styles.factorMessage}>{f.message}</Text>
-                    {f.evidence && (
-                      <Text style={styles.factorEvidence}>{f.evidence}</Text>
-                    )}
-                  </View>
-                  <Text style={[styles.severityTag, { color: sc.color }]}>
-                    {f.severity}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* ─── Domain Trust ─── */}
-        {domain && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Domain Trust</Text>
-            <TrustIndicator
-              tier={domain.reputation_tier}
-              description={domain.trust_description}
-              ageDays={domain.age_days}
-              registrar={domain.registrar}
-            />
-          </View>
-        )}
-
-        {/* ─── Network ─── */}
-        {network && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Network Analysis</Text>
-            <View style={styles.networkGrid}>
-              <NetworkBadge
-                icon="globe-outline"
-                label="DNS"
-                value={network.dns_resolved ? "Resolved" : "Failed"}
-                ok={network.dns_resolved ?? false}
-              />
-              <NetworkBadge
-                icon="lock-closed-outline"
-                label="SSL"
-                value={
-                  network.ssl_valid == null
-                    ? "N/A"
-                    : network.ssl_valid
-                      ? "Valid"
-                      : "Invalid"
-                }
-                ok={network.ssl_valid}
-              />
-              <NetworkBadge
-                icon="swap-horizontal-outline"
-                label="Redirects"
-                value={String(network.redirect_count)}
-                ok={network.redirect_count <= 2}
-              />
-              <NetworkBadge
-                icon="server-outline"
-                label="HTTP"
-                value={network.http_status ? String(network.http_status) : "—"}
-                ok={
-                  network.http_status != null &&
-                  network.http_status >= 200 &&
-                  network.http_status < 400
-                }
-              />
-            </View>
-            {network.final_url && network.final_url !== displayUrl && (
-              <View style={[styles.urlBox, { marginTop: 8 }]}>
-                <Ionicons
-                  name="arrow-forward-circle-outline"
-                  size={14}
-                  color={colors.textSecondary}
-                />
-                <Text style={styles.urlTextSecondary} numberOfLines={2}>
-                  Final URL: {network.final_url}
-                </Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* ─── ML Details ─── */}
-        {ml && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>ML Model Details</Text>
-            <View style={styles.mlRow}>
-              <MLStat
-                label="XGBoost"
-                value={`${(ml.xgb_score * 100).toFixed(1)}%`}
-              />
-              <MLStat
-                label="Trust-dampened"
-                value={`${((ml.dampened_score ?? 0) * 100).toFixed(1)}%`}
-              />
-            </View>
-          </View>
-        )}
-
-        {/* ─── Open link button ─── */}
-        {openableUrl && (status === "safe" || status === "suspicious") && (
+        {/* ─── Details toggle ─── */}
+        {hasDetails && (
           <TouchableOpacity
-            style={[
-              styles.openBtn,
-              {
-                backgroundColor:
-                  status === "safe" ? colors.success : colors.warning,
-              },
-            ]}
-            onPress={handleOpenLink}
-            activeOpacity={0.8}
+            style={styles.detailsToggle}
+            onPress={() => {
+              const next = !expanded;
+              LayoutAnimation.configureNext({
+                duration: 300,
+                create: { type: "easeInEaseOut", property: "opacity" },
+                update: { type: "easeInEaseOut" },
+                delete: { type: "easeInEaseOut", property: "opacity" },
+              });
+              setExpanded(next);
+            }}
+            activeOpacity={0.7}
           >
-            <Ionicons name="open-outline" size={16} color={colors.white} />
-            <Text style={styles.openBtnText}>Open URL</Text>
+            <View style={styles.detailsToggleLeft}>
+              <Text style={styles.detailsToggleTitle}>
+                {expanded ? "Hide details" : "See details"}
+              </Text>
+              <View style={styles.chipRow}>
+                {domain && <SummaryChip ok={domainOk} label="Domain" />}
+                {riskFactors.length > 0 && (
+                  <SummaryChip
+                    ok={false}
+                    label={`${riskFactors.length} warning${riskFactors.length > 1 ? "s" : ""}`}
+                  />
+                )}
+                {network && <SummaryChip ok={networkOk} label="Network" />}
+              </View>
+            </View>
+            <Ionicons
+              name={expanded ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={colors.textSecondary}
+            />
           </TouchableOpacity>
         )}
-        <TouchableOpacity
-          style={styles.deleteBtn}
-          onPress={handleDeletePress}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="trash-outline" size={16} color={colors.error} />
-          <Text style={styles.deleteBtnText}>Delete This Entry</Text>
-        </TouchableOpacity>
+
+        {expanded && (
+          <>
+            {/* ─── Risk Factors ─── */}
+            {riskFactors.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  Risk Factors ({riskFactors.length})
+                </Text>
+                {riskFactors.map((f, i) => {
+                  const sc =
+                    SEVERITY_CONFIG[f.severity as keyof typeof SEVERITY_CONFIG] ??
+                    SEVERITY_CONFIG.low;
+                  return (
+                    <View key={i} style={styles.factorRow}>
+                      <View
+                        style={[styles.severityDot, { backgroundColor: sc.color }]}
+                      />
+                      <View style={styles.factorContent}>
+                        <Text style={styles.factorMessage}>{f.message}</Text>
+                        {f.evidence && (
+                          <Text style={styles.factorEvidence}>{f.evidence}</Text>
+                        )}
+                      </View>
+                      <Text style={[styles.severityTag, { color: sc.color }]}>
+                        {f.severity}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* ─── Domain Trust ─── */}
+            {domain && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Domain Trust</Text>
+                <TrustIndicator
+                  tier={domain.reputation_tier}
+                  description={domain.trust_description}
+                  ageDays={domain.age_days}
+                  registrar={domain.registrar}
+                />
+              </View>
+            )}
+
+            {/* ─── Network ─── */}
+            {network && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Network Analysis</Text>
+                <View style={styles.networkGrid}>
+                  <NetworkBadge
+                    icon="globe-outline"
+                    label="DNS"
+                    value={network.dns_resolved ? "Resolved" : "Failed"}
+                    ok={network.dns_resolved ?? false}
+                  />
+                  <NetworkBadge
+                    icon="lock-closed-outline"
+                    label="SSL"
+                    value={
+                      network.ssl_valid == null
+                        ? "N/A"
+                        : network.ssl_valid
+                          ? "Valid"
+                          : "Invalid"
+                    }
+                    ok={network.ssl_valid}
+                  />
+                  <NetworkBadge
+                    icon="swap-horizontal-outline"
+                    label="Redirects"
+                    value={String(network.redirect_count)}
+                    ok={network.redirect_count <= 2}
+                  />
+                  {network.http_status != null && (
+                    <NetworkBadge
+                      icon="server-outline"
+                      label="HTTP"
+                      value={String(network.http_status)}
+                      ok={network.http_status >= 200 && network.http_status < 400}
+                    />
+                  )}
+                </View>
+              </View>
+            )}
+
+            {/* ─── ML Details ─── */}
+            {ml && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>ML Model Details</Text>
+                <View style={styles.mlRow}>
+                  <MLStat
+                    label="XGBoost"
+                    value={`${(ml.xgb_score * 100).toFixed(1)}%`}
+                  />
+                  <MLStat
+                    label="Trust-dampened"
+                    value={`${((ml.dampened_score ?? 0) * 100).toFixed(1)}%`}
+                  />
+                </View>
+              </View>
+            )}
+          </>
+        )}
+
       </ScrollView>
+
+      {/* ─── Sticky footer ─── */}
+      <View style={styles.footer}>
+        <View style={styles.footerSeparator} />
+        <View style={styles.footerButtons}>
+          {openableUrl && (status === "safe" || status === "suspicious") && (
+            <TouchableOpacity
+              style={[
+                styles.openBtn,
+                {
+                  backgroundColor:
+                    status === "safe" ? colors.success : colors.warning,
+                },
+              ]}
+              onPress={handleOpenLink}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="open-outline" size={16} color={colors.white} />
+              <Text style={styles.openBtnText}>Open URL</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.deleteBtn}
+            onPress={handleDeletePress}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="trash-outline" size={16} color={colors.error} />
+            <Text style={styles.deleteBtnText}>Delete This Entry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </View>
   );
 }
@@ -484,17 +560,17 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 40,
+    paddingBottom: 16,
     gap: 12,
   },
   // ── Verdict card ──
   verdictCard: {
     backgroundColor: colors.white,
     borderRadius: 16,
-    padding: 20,
+    padding: 14,
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
+    gap: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06,
@@ -622,6 +698,48 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginTop: 3,
   },
+  // ── Details toggle ──
+  detailsToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  detailsToggleLeft: {
+    flex: 1,
+    gap: 6,
+  },
+  detailsToggleTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textDark,
+  },
+  chipRow: {
+    flexDirection: "row",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 20,
+  },
+  chipText: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
   // ── Network ──
   networkGrid: {
     flexDirection: "row",
@@ -632,6 +750,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
   },
+  // ── Sticky footer ──
+  footer: {
+    backgroundColor: colors.white,
+    paddingBottom: Platform.OS === "ios" ? 34 : 16,
+  },
+  footerSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.cardBorder,
+    marginBottom: 12,
+  },
+  footerButtons: {
+    paddingHorizontal: 16,
+    gap: 10,
+  },
   // ── Open button ──
   openBtn: {
     flexDirection: "row",
@@ -640,7 +772,6 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 14,
     paddingVertical: 14,
-    marginTop: 4,
   },
   openBtnText: {
     fontSize: 15,

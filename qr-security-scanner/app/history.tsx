@@ -16,15 +16,17 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import Swipeable from "react-native-gesture-handler/Swipeable";
 import { scannerColors as colors } from "../src/constants/theme";
 import {
   clearHistory,
   loadHistory,
   loadHistoryEnabled,
+  removeHistoryItem,
   setHistoryEnabled,
   type HistoryItem,
 } from "../src/storage/historyStore";
-import { normalizeWebUrl, parseQrPayload } from "../src/utils/validation";
+import { parseQrPayload } from "../src/utils/validation";
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -33,11 +35,14 @@ function formatRelativeTime(isoString: string): string {
   const s = Math.floor(diffMs / 1000);
   if (s < 60) return "Just now";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 2) return "1 minute ago";
+  else if (m < 60) return `${m} minutes ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 2) return "1 hour ago";
+  else if (h < 24) return `${h} hours ago`;
   const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
+  if (d < 2) return "1 day ago";
+  else if (d < 30) return `${d} days ago`;
   return new Date(isoString).toLocaleDateString();
 }
 
@@ -46,8 +51,7 @@ function displayUrl(item: HistoryItem): string {
     return parseQrPayload(item.rawPayload).displayValue;
   }
 
-  const url =
-    item.normalizedUrl ?? normalizeWebUrl(item.rawPayload) ?? item.rawPayload;
+  const url = item.normalizedUrl;
   try {
     const parsed = new URL(url);
     return parsed.hostname + (parsed.pathname !== "/" ? parsed.pathname : "");
@@ -81,6 +85,20 @@ const STATUS_CONFIG = {
   },
 } as const;
 
+// ── Favicon avatar ────────────────────────────────────────────
+
+function FaviconAvatar({ label }: { label: string }) {
+  const letter = label
+    .replace(/^www\./, "")
+    .charAt(0)
+    .toUpperCase();
+  return (
+    <View style={styles.cardIconWrap}>
+      <Text style={styles.avatarLetter}>{letter}</Text>
+    </View>
+  );
+}
+
 // ── List item component ───────────────────────────────────────
 
 interface ListItemProps {
@@ -90,19 +108,14 @@ interface ListItemProps {
 
 function HistoryListItem({ item, onPress }: ListItemProps) {
   const cfg = STATUS_CONFIG[item.result.status] ?? STATUS_CONFIG.suspicious;
-  const score = Math.round((item.result.risk_score ?? 0) * 100);
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
       {/* Left accent bar */}
       <View style={[styles.cardAccent, { backgroundColor: cfg.color }]} />
 
-      {/* Icon */}
-      <View
-        style={[styles.cardIconWrap, { backgroundColor: `${cfg.color}18` }]}
-      >
-        <Ionicons name={cfg.icon} size={20} color={cfg.color} />
-      </View>
+      {/* Favicon avatar */}
+      <FaviconAvatar label={displayUrl(item)} />
 
       {/* Middle: url + status + time */}
       <View style={styles.cardMiddle}>
@@ -120,16 +133,18 @@ function HistoryListItem({ item, onPress }: ListItemProps) {
         </View>
       </View>
 
-      {/* Score pill */}
-      <View style={[styles.scorePill, { backgroundColor: `${cfg.color}20` }]}>
-        <Text style={[styles.scoreText, { color: cfg.color }]}>{score}%</Text>
-      </View>
+      {/* Status icon */}
+      <Ionicons
+        name={cfg.icon}
+        size={20}
+        color={cfg.color}
+        style={{ marginRight: 4 }}
+      />
 
       <Ionicons
         name="chevron-forward"
         size={14}
         color={colors.textSecondary}
-        style={{ marginLeft: 6 }}
       />
     </TouchableOpacity>
   );
@@ -191,6 +206,12 @@ export default function HistoryScreen() {
     router.push({ pathname: "/history-detail", params: { id: item.id } });
   };
 
+  const handleDeleteItem = async (id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await removeHistoryItem(id);
+    setItems((prev) => prev.filter((i) => i.id !== id));
+  };
+
   const ListHeader = (
     <>
       {/* ─── Save-history toggle ─── */}
@@ -214,7 +235,10 @@ export default function HistoryScreen() {
 
       {/* ─── Section label ─── */}
       {items.length > 0 && (
-        <Text style={styles.sectionLabel}>RECENT SCANS</Text>
+        <View style={styles.sectionLabelRow}>
+          <Text style={styles.sectionLabel}>RECENT SCANS</Text>
+          <View style={styles.sectionDivider} />
+        </View>
       )}
     </>
   );
@@ -329,10 +353,29 @@ export default function HistoryScreen() {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={ListHeader}
           renderItem={({ item }) => (
-            <HistoryListItem
-              item={item}
-              onPress={() => handleItemPress(item)}
-            />
+            <Swipeable
+              renderRightActions={() => (
+                <TouchableOpacity
+                  style={styles.deleteAction}
+                  onPress={() => handleDeleteItem(item.id)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons
+                    name="trash-outline"
+                    size={22}
+                    color={colors.white}
+                  />
+                </TouchableOpacity>
+              )}
+              overshootRight={false}
+              friction={2}
+              rightThreshold={60}
+            >
+              <HistoryListItem
+                item={item}
+                onPress={() => handleItemPress(item)}
+              />
+            </Swipeable>
           )}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
@@ -466,14 +509,24 @@ const styles = StyleSheet.create({
   },
 
   // ─ Section label
+  sectionLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 20,
+    marginTop: 24,
+    marginBottom: 10,
+    gap: 10,
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "600",
     color: colors.textSecondary,
     letterSpacing: 0.8,
-    marginHorizontal: 20,
-    marginTop: 24,
-    marginBottom: 10,
+  },
+  sectionDivider: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.cardBorder,
   },
 
   // ─ List
@@ -514,6 +567,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
+    backgroundColor: colors.card,
+  },
+  avatarLetter: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    letterSpacing: -0.3,
+  },
+  deleteAction: {
+    backgroundColor: colors.error,
+    justifyContent: "center",
+    alignItems: "center",
+    width: 72,
+    borderRadius: 16,
+    marginLeft: 8,
   },
   cardMiddle: {
     flex: 1,
@@ -543,18 +611,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
   },
-  scorePill: {
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    minWidth: 44,
-    alignItems: "center",
-  },
-  scoreText: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
   // ─ Loading state
   loadingState: {
     flex: 1,

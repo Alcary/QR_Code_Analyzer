@@ -32,24 +32,9 @@ function getIcon(status?: string, score?: number): keyof typeof Ionicons.glyphMa
   return 'warning';
 }
 
-function getLabel(status?: string, score?: number): string {
-  if (status === 'safe') return 'Safe';
-  if (status === 'suspicious') return 'Suspicious';
-  if (status === 'danger') return 'Threat Detected';
-  if (status === 'info') return 'Not Analyzed';
-  if (score !== undefined) {
-    if (score < 0.30) return 'Safe';
-    if (score < 0.60) return 'Suspicious';
-    return 'Threat Detected';
-  }
-  return '';
-}
-
 export default function RiskScoreRing({ score, size = 120, status }: RiskScoreRingProps) {
   const ringColor = getColor(status, score);
   const icon = getIcon(status, score);
-  const label = getLabel(status, score);
-  const pct = Math.round(score * 100);
   const bgColor = `${ringColor}15`;
 
   return (
@@ -66,12 +51,8 @@ export default function RiskScoreRing({ score, size = 120, status }: RiskScoreRi
           },
         ]}
       >
-        <Ionicons name={icon} size={size * 0.3} color={ringColor} />
-        <Text style={[styles.scoreText, { color: ringColor }]}>
-          {pct}%
-        </Text>
+        <Ionicons name={icon} size={size * 0.55} color={ringColor} />
       </View>
-      <Text style={[styles.statusLabel, { color: ringColor }]}>{label}</Text>
     </View>
   );
 }
@@ -84,15 +65,5 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  scoreText: {
-    fontSize: 22,
-    fontWeight: '800',
-    marginTop: 2,
-  },
-  statusLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 10,
   },
 });
