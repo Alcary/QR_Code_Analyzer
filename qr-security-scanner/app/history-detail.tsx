@@ -13,7 +13,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { scannerColors as colors } from "../src/constants/theme";
@@ -88,10 +90,12 @@ function SummaryChip({ ok, label }: { ok: boolean | null; label: string }) {
 
 export default function HistoryDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [item, setItem] = useState<HistoryItem | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDangerConfirm, setShowDangerConfirm] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -106,7 +110,7 @@ export default function HistoryDetailScreen() {
     });
   }, [id]);
 
-  const handleOpenLink = async () => {
+  const openLink = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const url =
       item?.normalizedUrl ??
@@ -118,6 +122,20 @@ export default function HistoryDetailScreen() {
       const supported = await Linking.canOpenURL(url);
       if (supported) await Linking.openURL(url);
     }
+  };
+
+  const handleOpenLink = () => {
+    if (item?.result?.status === "danger") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setShowDangerConfirm(true);
+    } else {
+      openLink();
+    }
+  };
+
+  const handleCopyText = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Clipboard.setStringAsync(item?.rawPayload ?? "");
   };
 
   const handleDeletePress = () => {
@@ -213,6 +231,59 @@ export default function HistoryDetailScreen() {
                 activeOpacity={0.7}
               >
                 <Text style={styles.modalBtnDestructText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ─── Danger confirmation modal ─── */}
+      <Modal
+        visible={showDangerConfirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDangerConfirm(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setShowDangerConfirm(false)}
+        >
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={[styles.modalIconWrap, { borderRadius: 34, width: 68, height: 68 }]}>
+              <Ionicons name="warning" size={32} color={colors.error} />
+            </View>
+            <Text style={styles.modalTitle}>Dangerous Website</Text>
+            <Text style={styles.modalBody}>
+              Our analysis flagged this link as malicious. Opening it may expose
+              you to phishing, malware, or data theft.
+            </Text>
+            <View style={styles.dangerUrlPill}>
+              <Ionicons name="warning-outline" size={12} color={colors.error} />
+              <Text
+                style={styles.dangerUrlPillText}
+                numberOfLines={1}
+                ellipsizeMode="middle"
+              >
+                {displayUrl}
+              </Text>
+            </View>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnCancel]}
+                onPress={() => setShowDangerConfirm(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalBtnCancelText}>Go Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnDestruct]}
+                onPress={() => {
+                  setShowDangerConfirm(false);
+                  openLink();
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalBtnDestructText}>Open Anyway</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -464,23 +535,40 @@ export default function HistoryDetailScreen() {
       </ScrollView>
 
       {/* ─── Sticky footer ─── */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={styles.footerSeparator} />
         <View style={styles.footerButtons}>
-          {openableUrl && (status === "safe" || status === "suspicious") && (
+          {openableUrl &&
+            (status === "safe" ||
+              status === "suspicious" ||
+              status === "danger") && (
+              <TouchableOpacity
+                style={[
+                  styles.openBtn,
+                  {
+                    backgroundColor:
+                      status === "safe"
+                        ? colors.success
+                        : status === "danger"
+                          ? colors.error
+                          : colors.warning,
+                  },
+                ]}
+                onPress={handleOpenLink}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="open-outline" size={16} color={colors.white} />
+                <Text style={styles.openBtnText}>Open URL</Text>
+              </TouchableOpacity>
+            )}
+          {status === "info" && (
             <TouchableOpacity
-              style={[
-                styles.openBtn,
-                {
-                  backgroundColor:
-                    status === "safe" ? colors.success : colors.warning,
-                },
-              ]}
-              onPress={handleOpenLink}
+              style={styles.copyBtn}
+              onPress={handleCopyText}
               activeOpacity={0.8}
             >
-              <Ionicons name="open-outline" size={16} color={colors.white} />
-              <Text style={styles.openBtnText}>Open URL</Text>
+              <Ionicons name="copy-outline" size={16} color={colors.primary} />
+              <Text style={styles.copyBtnText}>Copy Text</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -753,7 +841,6 @@ const styles = StyleSheet.create({
   // ── Sticky footer ──
   footer: {
     backgroundColor: colors.white,
-    paddingBottom: Platform.OS === "ios" ? 34 : 16,
   },
   footerSeparator: {
     height: StyleSheet.hairlineWidth,
@@ -777,6 +864,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: colors.white,
+  },
+  copyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderRadius: 14,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: `${colors.primary}30`,
+    backgroundColor: colors.white,
+  },
+  copyBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.primary,
   },
   deleteBtn: {
     flexDirection: "row",
@@ -864,5 +967,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     color: colors.white,
+  },
+  dangerUrlPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.dangerBg,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    alignSelf: "stretch",
+    marginBottom: 20,
+  },
+  dangerUrlPillText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.error,
+    fontWeight: "600",
   },
 });

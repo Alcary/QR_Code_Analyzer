@@ -1,15 +1,14 @@
 {
   "expo": {
-    "name": "qr-security-scanner",
+    "name": "SafeQR",
     "slug": "qr-security-scanner",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "icon": "./assets/images/app-icon.png",
     "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
@@ -18,7 +17,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
+        "backgroundColor": "#E3F2FD"
       },
       "package": "com.anonymous.qrsecurityscanner",
       "permissions": [
@@ -51,7 +51,11 @@
       "apiKey": "",
       "apiTimeoutMs": 15000,
       "apiMaxRetries": 2,
-      "apiRetryDelayMs": 1000
+      "apiRetryDelayMs": 1000,
+      "router": {},
+      "eas": {
+        "projectId": "81bdce81-0688-48f8-9cc6-7e13337f8591"
+      }
     }
   }
 }
