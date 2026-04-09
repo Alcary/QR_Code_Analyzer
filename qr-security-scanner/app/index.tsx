@@ -6,6 +6,7 @@ import {
   StatusBar,
   ActivityIndicator,
   TouchableOpacity,
+  Modal,
 } from "react-native";
 import { CameraView } from "expo-camera";
 import { useRouter } from "expo-router";
@@ -62,6 +63,8 @@ export default function QRCodeScanner() {
     setScannedData,
   } = useScanner();
 
+  const [noQrFound, setNoQrFound] = useState(false);
+
   // Wrapper to bridge the image scanner hook with the scanner state
   const handleImageScanSuccess = (data: string) => {
     setScanned(true);
@@ -70,6 +73,7 @@ export default function QRCodeScanner() {
 
   const { isScanningImage, pickImage } = useImageScanner(
     handleImageScanSuccess,
+    () => setNoQrFound(true),
   );
 
   const [isFlashlightOn, setIsFlashlightOn] = useState(false);
@@ -212,6 +216,32 @@ export default function QRCodeScanner() {
         url={scannedData}
         onClose={handleReset}
       />
+
+      <Modal
+        visible={noQrFound}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setNoQrFound(false)}
+      >
+        <View style={styles.noQrOverlay}>
+          <View style={styles.noQrCard}>
+            <View style={styles.noQrIconCircle}>
+              <Ionicons name="image-outline" size={36} color={colors.warning} />
+            </View>
+            <Text style={styles.noQrTitle}>No QR Code Found</Text>
+            <Text style={styles.noQrSubtitle}>
+              No QR code was detected in the selected image. Try a clearer photo with the code fully visible.
+            </Text>
+            <TouchableOpacity
+              style={styles.noQrButton}
+              onPress={() => setNoQrFound(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.noQrButtonText}>Got It</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -270,5 +300,66 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+  },
+  noQrOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  noQrCard: {
+    width: "100%",
+    backgroundColor: colors.white,
+    borderRadius: 24,
+    paddingHorizontal: 25,
+    paddingTop: 30,
+    paddingBottom: 25,
+    alignItems: "center",
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  noQrIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255, 149, 0, 0.10)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  noQrTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: colors.textDark,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  noQrSubtitle: {
+    fontSize: 15,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  noQrButton: {
+    width: "100%",
+    paddingVertical: 14,
+    borderRadius: 30,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  noQrButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.white,
   },
 });

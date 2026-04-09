@@ -107,7 +107,7 @@ async function fetchWithTimeout(
  */
 function isRetryable(error: unknown): boolean {
   if (error instanceof TypeError) return true; // Network error
-  if (error instanceof DOMException && error.name === "AbortError") return true; // Timeout
+  if ((error as any)?.name === "AbortError") return true; // Timeout
   return false;
 }
 
@@ -225,14 +225,11 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
   // network failure (TypeError) or timeout (AbortError).
   console.error("[apiService] All retry attempts exhausted:", lastError);
 
-  const isTimeout =
-    lastError instanceof DOMException && lastError.name === "AbortError";
+  const isTimeout = (lastError as any)?.name === "AbortError";
 
-  return {
-    status: "suspicious" as const,
-    message: isTimeout
-      ? "Request timed out. Check your network connection."
-      : "Could not connect to security server. Check your network.",
-    risk_score: 0,
-  };
+  throw new Error(
+    isTimeout
+      ? "Request timed out. The server may be unavailable."
+      : "Could not reach the security server. Check your network connection.",
+  );
 };
