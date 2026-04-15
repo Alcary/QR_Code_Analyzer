@@ -339,7 +339,7 @@ class ContainerManager:
                         "PORT": str(self.container_port),
                     },
                     mem_limit="1g",
-                    cpu_quota=100000,  # 1 CPU
+                    cpu_quota=100000,
                     restart_policy={"Name": "unless-stopped"},
                 )
             )

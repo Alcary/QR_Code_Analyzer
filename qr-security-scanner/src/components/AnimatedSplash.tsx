@@ -26,7 +26,8 @@ const DOT_BR = 8;       // data dot border radius
 
 // Orbital radius — how far each piece starts from its final position
 const ORBIT_R = 180;
-const D = ORBIT_R * 0.707; // cos/sin 45°
+// cos/sin 45° — positions each piece on a diagonal from the centre
+const D = ORBIT_R * 0.707;
 
 // ─── Sub-components ────────────────────────────────────────────────────────
 
@@ -77,7 +78,8 @@ export default function AnimatedSplash({ onFinish }: Props) {
   const containerOpacity = useSharedValue(1);
 
   const spring = { damping: 14, stiffness: 95 };
-  const STAGGER = 60; // ms between each piece flying in
+  // ms between each piece flying in
+  const STAGGER = 60;
 
   useEffect(() => {
     // Each piece springs into position from its orbital start, staggered

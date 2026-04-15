@@ -1,12 +1,8 @@
 /**
- * API Service — Security Scanner Client
+ * HTTP client for the QR security backend.
  *
- * Communicates with the QR Security Scanner backend.
- * Features:
- *   - Configurable via app.json extra / expo-constants
- *   - AbortController-based request timeout
- *   - Exponential-backoff retry on transient failures
- *   - API key authentication (X-API-Key header)
+ * Handles request timeouts (AbortController), exponential-backoff retries,
+ * and API key authentication. Configuration is read from app.json extra.
  */
 
 import { API_CONFIG } from "../constants/api";
@@ -125,7 +121,6 @@ export const scanURL = async (url: string): Promise<ScanResult> => {
     "Content-Type": "application/json",
   };
 
-  // Include API key if configured
   if (API_CONFIG.apiKey) {
     headers["X-API-Key"] = API_CONFIG.apiKey;
   }

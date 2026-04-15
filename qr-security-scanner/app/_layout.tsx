@@ -1,3 +1,8 @@
+/**
+ * Root layout. Wires Expo Router into a JS-based stack navigator for full
+ * slide animation control, and renders the animated splash on first load.
+ */
+
 import { useEffect, useState } from "react";
 import { Easing, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -30,7 +35,8 @@ const slideSpec = {
   animation: "timing" as const,
   config: {
     duration: 380,
-    easing: Easing.bezier(0.42, 0, 0.58, 1), // ease-in-out
+    // Standard CSS ease-in-out cubic bezier
+    easing: Easing.bezier(0.42, 0, 0.58, 1),
   },
 };
 

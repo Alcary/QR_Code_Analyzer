@@ -43,15 +43,15 @@ def test_no_proxy_returns_client_host():
         assert _get_client_ip(req) == "10.0.0.1"
 
 
+# XFF: client, proxy → real client is index 0
 def test_proxy_count_1_returns_first_hop():
-    """XFF: client, proxy → real client is index 0."""
     req = _make_request(xff="203.0.113.5, 10.0.0.1")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "203.0.113.5"
 
 
+# XFF: client, proxy1, proxy2 → real client is index 0
 def test_proxy_count_2_returns_first_hop():
-    """XFF: client, proxy1, proxy2 → real client is index 0."""
     req = _make_request(xff="203.0.113.5, 10.0.0.1, 10.0.0.2")
     with _with_proxy_count(2):
         assert _get_client_ip(req) == "203.0.113.5"
@@ -65,43 +65,39 @@ def test_proxy_count_2_middle_client():
         assert _get_client_ip(req) == "2.2.2.2"
 
 
+# XFF with fewer entries than TRUSTED_PROXY_COUNT → clamp to hops[0]
 def test_fewer_hops_than_trusted_count_clamps_to_first():
-    """If XFF has fewer entries than TRUSTED_PROXY_COUNT, clamp to hops[0]."""
     req = _make_request(xff="203.0.113.5")
     with _with_proxy_count(5):
         assert _get_client_ip(req) == "203.0.113.5"
 
 
 def test_proxy_enabled_but_empty_xff_falls_back():
-    """Empty X-Forwarded-For with TRUSTED_PROXY_COUNT > 0 falls back to client.host."""
     req = _make_request(xff="", client_host="5.5.5.5")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "5.5.5.5"
 
 
 def test_whitespace_trimmed_from_hops():
-    """Extra whitespace around hop entries is stripped."""
     req = _make_request(xff="  203.0.113.5  ,   10.0.0.1  ")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "203.0.113.5"
 
 
 def test_ipv4_port_suffix_stripped():
-    """XFF entries with :port should return only the address."""
     req = _make_request(xff="203.0.113.5:12345, 10.0.0.1")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "203.0.113.5"
 
 
 def test_bracketed_ipv6_unwrapped():
-    """Bracketed IPv6 in XFF should be returned as a bare IP (no brackets)."""
     req = _make_request(xff="[2001:db8::1], 10.0.0.1")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "2001:db8::1"
 
 
+# rpartition(':') would truncate bare IPv6 (e.g. '::1' → ''), must be handled specially
 def test_bare_ipv6_loopback_not_mangled():
-    """Bare IPv6 loopback must not be truncated by rpartition(':')."""
     req = _make_request(xff="::1, 10.0.0.1")
     with _with_proxy_count(1):
         assert _get_client_ip(req) == "::1"
@@ -169,7 +165,6 @@ def reset_api_key_warned():
 
 @pytest.mark.asyncio
 async def test_api_key_warning_emitted_once(reset_api_key_warned, caplog):
-    """With API_KEY unset, the warning must appear exactly once over N calls."""
     with patch.object(security_module.settings, "API_KEY", ""):
         with caplog.at_level(logging.WARNING, logger="app.core.security"):
             result1 = await security_module.verify_api_key(None)
@@ -185,7 +180,6 @@ async def test_api_key_warning_emitted_once(reset_api_key_warned, caplog):
 
 @pytest.mark.asyncio
 async def test_api_key_warning_not_emitted_when_key_is_set(reset_api_key_warned, caplog):
-    """When API_KEY is set, no dev-mode warning is emitted."""
     with patch.object(security_module.settings, "API_KEY", "supersecretkey"):
         with caplog.at_level(logging.WARNING, logger="app.core.security"):
             # valid key
@@ -197,36 +191,33 @@ async def test_api_key_warning_not_emitted_when_key_is_set(reset_api_key_warned,
 # ── API_KEY length validation (Settings) ─────────────────────
 
 
+# empty string disables auth in dev mode — must be accepted by the validator
 def test_api_key_empty_allowed():
-    """Empty API_KEY is valid — disables auth in dev mode."""
     s = Settings(API_KEY="")
     assert s.API_KEY == ""
 
 
 def test_api_key_32_chars_allowed():
-    """Exactly 32 characters is the minimum valid length."""
     key = "a" * 32
     s = Settings(API_KEY=key)
     assert s.API_KEY == key
 
 
 def test_api_key_long_allowed():
-    """Keys longer than 32 characters are accepted."""
     key = "x" * 64
     s = Settings(API_KEY=key)
     assert s.API_KEY == key
 
 
 def test_api_key_too_short_rejected():
-    """Any non-empty key shorter than 32 characters must be rejected at startup."""
     from pydantic import ValidationError
     with pytest.raises(ValidationError) as exc:
         Settings(API_KEY="short")
     assert "too short" in str(exc.value).lower()
 
 
+# off-by-one: 31 chars is one under the minimum
 def test_api_key_31_chars_rejected():
-    """Off-by-one: 31 characters is one under the minimum."""
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         Settings(API_KEY="a" * 31)
@@ -236,12 +227,9 @@ def test_api_key_31_chars_rejected():
 
 
 @pytest.mark.asyncio
+# Many coroutines racing on NOSCRIPT must trigger load_script() exactly once;
+# the lock + stale-SHA sentinel prevents redundant reloads.
 async def test_reload_script_called_once_under_concurrent_noscript():
-    """
-    When many coroutines race on a NOSCRIPT error, _reload_script must call
-    load_script() exactly once — the lock plus stale-SHA sentinel must
-    prevent the redundant reloads.
-    """
     import asyncio
     from unittest.mock import AsyncMock, patch
     from app.main import RateLimiter
@@ -266,12 +254,9 @@ async def test_reload_script_called_once_under_concurrent_noscript():
 
 
 @pytest.mark.asyncio
+# If load_script() returns None (Redis unreachable), SHA must be cleared so
+# subsequent requests fall back to EVAL rather than using the stale SHA.
 async def test_reload_script_updates_sha_to_none_when_redis_unavailable():
-    """
-    If load_script() returns None (Redis unreachable during reload), the SHA
-    must be set to None so subsequent requests fall back to EVAL rather than
-    using the stale SHA.
-    """
     from unittest.mock import patch
     from app.main import RateLimiter
 
@@ -285,14 +270,10 @@ async def test_reload_script_updates_sha_to_none_when_redis_unavailable():
 
 
 @pytest.mark.asyncio
+# If another coroutine refreshed the SHA while we waited on the lock, skip
+# load_script() (stale-SHA sentinel). Simulated by pre-acquiring the lock,
+# then changing the SHA before releasing — the task detects the change and returns early.
 async def test_reload_script_skipped_when_sha_already_refreshed():
-    """
-    If the SHA was updated by another coroutine while we were waiting on the
-    lock, _reload_script must not call load_script() (stale-SHA sentinel).
-
-    Simulated by pre-acquiring the lock so the task blocks, then changing the
-    SHA before releasing — the task should detect the change and return early.
-    """
     import asyncio
     from unittest.mock import AsyncMock, patch
     from app.main import RateLimiter

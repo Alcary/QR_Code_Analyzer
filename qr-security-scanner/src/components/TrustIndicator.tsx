@@ -39,11 +39,9 @@ export default function TrustIndicator({ tier, description, ageDays, registrar }
 
   return (
     <View style={styles.card}>
-      {/* Colored left accent bar */}
       <View style={[styles.accent, { backgroundColor: config.color }]} />
 
       <View style={styles.content}>
-        {/* Tier badge pill */}
         <View style={[styles.tierBadge, { backgroundColor: `${config.color}18` }]}>
           <Ionicons name={config.icon} size={15} color={config.color} />
           <Text style={[styles.tierLabel, { color: config.color }]}>{config.label}</Text>

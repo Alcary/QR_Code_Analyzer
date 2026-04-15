@@ -9,6 +9,8 @@
     "newArchEnabled": true,
     "icon": "./assets/images/app-icon.png",
     "splash": {
+      "image": "./assets/images/app-icon.png",
+      "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {

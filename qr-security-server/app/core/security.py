@@ -1,12 +1,8 @@
 """
-API Key Authentication
+API key authentication for the scan endpoint.
 
-Simple bearer-token authentication for the mobile app.
-The API key is configured via the API_KEY environment variable.
-
-Usage in endpoints:
-    @router.post("/scan", dependencies=[Depends(verify_api_key)])
-    async def scan_url(request: ScanRequest): ...
+The key is configured via the API_KEY environment variable. When unset,
+authentication is skipped with a one-time warning (dev mode).
 """
 
 import logging

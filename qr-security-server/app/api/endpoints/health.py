@@ -1,11 +1,4 @@
-"""
-Health Check Endpoint
-
-Provides a /health endpoint that reports:
-- Server status
-- ML model load status
-- Uptime
-"""
+"""GET /health endpoint for monitoring and load balancers."""
 
 import logging
 import time

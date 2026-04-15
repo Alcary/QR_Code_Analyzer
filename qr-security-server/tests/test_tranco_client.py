@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.mark.asyncio
 async def test_cache_hit_returns_rank():
-    """A cached str rank is parsed and returned without hitting the API."""
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value="42000")
 
@@ -27,8 +26,8 @@ async def test_cache_hit_returns_rank():
 
 
 @pytest.mark.asyncio
+# 'none' string in Redis is the sentinel for a previously confirmed unranked domain
 async def test_cache_hit_none_sentinel_returns_none():
-    """The 'none' sentinel means the domain was previously confirmed unranked."""
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value="none")
 
@@ -43,7 +42,6 @@ async def test_cache_hit_none_sentinel_returns_none():
 
 @pytest.mark.asyncio
 async def test_cache_miss_calls_api_and_caches_result():
-    """On a cache miss, _fetch_rank is called and the result is stored."""
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value=None)
     mock_redis.setex = AsyncMock()
@@ -61,8 +59,8 @@ async def test_cache_miss_calls_api_and_caches_result():
 
 
 @pytest.mark.asyncio
+# unranked domains are stored as 'none' so a later cache hit returns None without hitting the API
 async def test_cache_miss_unranked_domain_stores_none_sentinel():
-    """An unranked domain caches the string 'none' as sentinel."""
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value=None)
     mock_redis.setex = AsyncMock()
@@ -79,7 +77,6 @@ async def test_cache_miss_unranked_domain_stores_none_sentinel():
 
 @pytest.mark.asyncio
 async def test_redis_error_falls_through_to_api():
-    """A Redis error is logged and the API is called as fallback."""
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(side_effect=ConnectionError("redis down"))
 
@@ -94,7 +91,6 @@ async def test_redis_error_falls_through_to_api():
 
 @pytest.mark.asyncio
 async def test_no_redis_calls_api_directly():
-    """When Redis is not configured, _fetch_rank is called without cache."""
     with patch("app.services.tranco_client.get_redis", return_value=None):
         with patch("app.services.tranco_client._fetch_rank", AsyncMock(return_value=7777)) as mock_fetch:
             from app.services.tranco_client import _get_rank

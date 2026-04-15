@@ -1,9 +1,14 @@
+/**
+ * Bottom-sheet modal for non-URL QR payloads (Wi-Fi, contact, SMS, etc.).
+ * Displays parsed fields and the raw QR content; no backend call is made.
+ */
+
 import React from 'react';
 import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { scannerColors as colors } from '../constants/theme'; // Ensure path is correct
+import { scannerColors as colors } from '../constants/theme';
 import { SCREEN_WIDTH, SCREEN_HEIGHT } from '../constants/layout';
 import { parseQrPayload } from '../utils/validation';
 

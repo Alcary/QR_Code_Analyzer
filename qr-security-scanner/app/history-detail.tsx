@@ -1,3 +1,8 @@
+/**
+ * Scan history detail screen. Shows the full result for a single history
+ * entry, with a danger confirmation gate before opening flagged URLs.
+ */
+
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,

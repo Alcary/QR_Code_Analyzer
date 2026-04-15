@@ -24,7 +24,8 @@ from app.core.redis_client import get_client as get_redis
 logger = logging.getLogger(__name__)
 
 _TRANCO_API   = "https://tranco-list.eu/api/ranks/domain/{domain}"
-_CACHE_TTL    = 86_400          # 24 hours in seconds
+# 24 hours in seconds
+_CACHE_TTL    = 86_400
 _CACHE_PREFIX = "tranco:"
 
 _TIER_TOP_10K  = (10_000,  0.15)

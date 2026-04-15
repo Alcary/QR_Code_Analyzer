@@ -204,19 +204,14 @@ async def test_content_flag_password_field():
 
 @pytest.mark.asyncio
 async def test_tls_error_sets_ssl_verification_failed():
-    """An aiohttp ClientConnectorSSLError surfaces as error='ssl_verification_failed'.
-
-    aiohttp raises ClientConnectorSSLError inside the __aenter__ of the
-    response context manager (i.e. when the TCP+TLS handshake actually runs),
-    so we trigger it at that point.
-    """
     inspector = NetworkInspector()
 
     ssl_error = aiohttp.ClientConnectorSSLError(
         connection_key=MagicMock(), os_error=OSError("cert verify failed")
     )
 
-    # response context manager whose __aenter__ raises the SSL error
+    # aiohttp raises ClientConnectorSSLError inside __aenter__ (when the TLS
+    # handshake runs), so we trigger it at that point rather than on .get().
     mock_resp_cm = MagicMock()
     mock_resp_cm.__aenter__ = AsyncMock(side_effect=ssl_error)
     mock_resp_cm.__aexit__ = AsyncMock(return_value=False)

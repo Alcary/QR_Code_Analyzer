@@ -354,9 +354,9 @@ class TestEnsureRunning:
     def _manager(self) -> ContainerManager:
         return ContainerManager()
 
+    # Fast path: healthy container skips the lock and never calls start()
     @pytest.mark.asyncio
     async def test_healthy_returns_true_without_restart(self):
-        """Fast path: healthy container never touches the lock or start()."""
         mgr = self._manager()
         with patch.object(mgr, "_is_healthy", AsyncMock(return_value=True)):
             with patch.object(mgr, "start", AsyncMock()) as mock_start:
@@ -367,7 +367,6 @@ class TestEnsureRunning:
 
     @pytest.mark.asyncio
     async def test_unhealthy_triggers_restart(self):
-        """Unhealthy container causes start() to be called once."""
         mgr = self._manager()
         with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):
             with patch.object(mgr, "start", AsyncMock(return_value=True)) as mock_start:
@@ -378,13 +377,10 @@ class TestEnsureRunning:
         assert mgr._restart_generation == 1
         assert mgr._last_restart_ok is True
 
+    # Many coroutines seeing an unhealthy container must trigger exactly one restart;
+    # the generation counter prevents the rest from calling start() redundantly.
     @pytest.mark.asyncio
     async def test_restart_called_once_under_concurrent_requests(self):
-        """
-        Many coroutines seeing an unhealthy container simultaneously must
-        trigger exactly one restart — the generation counter prevents the
-        rest from calling start() redundantly.
-        """
         mgr = self._manager()
         start_calls = 0
 
@@ -403,12 +399,10 @@ class TestEnsureRunning:
         assert start_calls == 1, f"Expected 1 start() call, got {start_calls}"
         assert all(r is True for r in results)
 
+    # Coroutines that waited on the lock return _last_restart_ok without attempting
+    # their own restart — verified here with a restart that returns False.
     @pytest.mark.asyncio
     async def test_queued_coroutines_return_restart_result(self):
-        """
-        Coroutines that waited on the lock must return _last_restart_ok,
-        not attempt their own restart.
-        """
         mgr = self._manager()
 
         async def slow_start():
@@ -426,7 +420,6 @@ class TestEnsureRunning:
 
     @pytest.mark.asyncio
     async def test_externally_managed_does_not_restart(self):
-        """Externally managed service: unhealthy returns False, never restarts."""
         mgr = self._manager()
         mgr._externally_managed = True
         with patch.object(mgr, "_is_healthy", AsyncMock(return_value=False)):

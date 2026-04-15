@@ -1,3 +1,9 @@
+"""
+Application settings loaded from environment variables and .env.
+
+All runtime behaviour (timeouts, limits, feature flags) is configured here.
+"""
+
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict, field_validator
 
@@ -69,7 +75,8 @@ class Settings(BaseSettings):
 
     # ── Cache ─────────────────────────────────────────────────
     CACHE_MAX_SIZE: int = 2000
-    CACHE_TTL: int = 3600  # 1 hour
+    # 1 hour
+    CACHE_TTL: int = 3600
 
     model_config = ConfigDict(env_file=".env", case_sensitive=True)
 

@@ -70,7 +70,6 @@ def test_penalty_for_auth_bait_paths(path, expected):
 # ── No double-counting for hyphenated whole-segment patterns ──────
 
 def test_reset_password_counts_once():
-    """'reset-password' matches as a whole segment; 'password' sub-part must not add extra."""
     assert _auth_bait_penalty("/reset-password") == pytest.approx(0.10)
 
 

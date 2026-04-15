@@ -8,15 +8,14 @@ from app.core.config import settings
 
 
 def test_network_inspector_http_timeout_matches_settings():
-    """NetworkInspector singleton must use NETWORK_TIMEOUT from settings."""
     assert network_inspector.http_timeout == settings.NETWORK_TIMEOUT, (
         f"Expected http_timeout={settings.NETWORK_TIMEOUT}, "
         f"got {network_inspector.http_timeout}"
     )
 
 
+# not the 10.0 hardcoded default that NetworkInspector.__init__ falls back to
 def test_network_inspector_whois_timeout_matches_settings():
-    """NetworkInspector singleton must use WHOIS_TIMEOUT from settings, not the 10.0 default."""
     assert network_inspector.whois_timeout == settings.WHOIS_TIMEOUT, (
         f"Expected whois_timeout={settings.WHOIS_TIMEOUT}, "
         f"got {network_inspector.whois_timeout}"

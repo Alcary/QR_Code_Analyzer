@@ -1,3 +1,8 @@
+/**
+ * Scrollable result view rendered inside SecurityScanModal.
+ * Shows verdict, risk score, and an expandable details section.
+ */
+
 import React, { useState } from "react";
 import {
   View,

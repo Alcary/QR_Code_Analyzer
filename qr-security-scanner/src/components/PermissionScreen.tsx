@@ -25,12 +25,10 @@ export default function PermissionScreen({ onRequest }: PermissionScreenProps) {
       <StatusBar barStyle="dark-content" backgroundColor={colors.card} />
 
       <View style={styles.contentContainer}>
-        {/* Icon */}
         <View style={styles.iconCircle}>
           <Ionicons name="camera" size={44} color={colors.primary} />
         </View>
 
-        {/* App name */}
         <Text style={styles.appName}>QR Security Check</Text>
 
         <Text style={styles.title}>Camera Access Required</Text>

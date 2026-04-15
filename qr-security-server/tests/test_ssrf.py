@@ -28,20 +28,22 @@ from app.services.analyzer import URLAnalyzer
         ("192.168.255.255", True),
         # ── Link-local (incl. AWS/Azure metadata endpoint) ────
         ("169.254.0.1", True),
-        ("169.254.169.254", True),  # AWS instance metadata — critical SSRF target
+        # AWS/Azure instance metadata endpoint — high-value SSRF target
+        ("169.254.169.254", True),
         # ── Carrier-grade NAT ─────────────────────────────────
         ("100.64.0.1", True),
         ("100.127.255.255", True),
         # ── Reserved / TEST-NET ───────────────────────────────
-        ("192.0.2.1", True),       # TEST-NET-1
-        ("198.51.100.1", True),    # TEST-NET-2
-        ("203.0.113.1", True),     # TEST-NET-3
-        ("192.0.0.1", True),       # IETF protocol assignments
+        ("192.0.2.1", True),
+        ("198.51.100.1", True),
+        ("203.0.113.1", True),
+        # IETF protocol assignments
+        ("192.0.0.1", True),
         # ── Multicast / Reserved ─────────────────────────────
-        ("224.0.0.1", True),       # Multicast start
-        ("239.255.255.255", True), # Multicast end
-        ("240.0.0.1", True),       # Reserved
-        ("255.255.255.255", True), # Broadcast
+        ("224.0.0.1", True),
+        ("239.255.255.255", True),
+        ("240.0.0.1", True),
+        ("255.255.255.255", True),
         # ── "This network" ───────────────────────────────────
         ("0.0.0.1", True),
         # ── IPv6 loopback ─────────────────────────────────────
@@ -55,9 +57,10 @@ from app.services.analyzer import URLAnalyzer
         # ── Public IPs — must NOT be blocked ─────────────────
         ("8.8.8.8", False),
         ("1.1.1.1", False),
-        ("142.250.80.46", False),  # google.com
-        ("104.16.132.229", False), # cloudflare
-        ("2606:4700:4700::1111", False),  # Cloudflare DNS (public IPv6)
+        ("142.250.80.46", False),
+        ("104.16.132.229", False),
+        # Public IPv6 (Cloudflare DNS)
+        ("2606:4700:4700::1111", False),
     ],
 )
 def test_is_private_or_reserved(addr: str, should_block: bool):
@@ -67,13 +70,10 @@ def test_is_private_or_reserved(addr: str, should_block: bool):
     )
 
 
+# Fail-safe: if the SSRF pre-check raises (e.g. DNS error, thread pool shutdown),
+# the analyzer must return danger rather than fall through unverified.
 @pytest.mark.asyncio
 async def test_ssrf_precheck_exception_blocks_request():
-    """
-    If the SSRF pre-check raises (e.g. DNS resolution error, thread pool
-    shutdown), the analyzer must fail-safe and return danger — not fall
-    through to normal analysis without having verified the host.
-    """
     _analyzer = URLAnalyzer(cache_maxsize=1, cache_ttl=1)
 
     with patch(

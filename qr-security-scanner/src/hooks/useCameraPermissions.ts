@@ -1,3 +1,8 @@
+/**
+ * Manages camera permission state without triggering the system dialog on mount.
+ * The dialog is deferred until the user explicitly taps the grant button.
+ */
+
 import { useState, useEffect } from 'react';
 import { Camera } from 'expo-camera';
 
@@ -8,8 +13,8 @@ export const useCameraPermissions = () => {
     // Check status first without requesting (avoids immediate system dialog)
     (async () => {
       const { status } = await Camera.getCameraPermissionsAsync();
-      // If status is 'undetermined', we set to false to show the PermissionScreen
-      // instead of the LoadingScreen (null)
+      // 'undetermined' is treated as false so the PermissionScreen is shown
+      // rather than the loading spinner (which only appears for null).
       setHasPermission(status === 'granted');
     })();
   }, []);

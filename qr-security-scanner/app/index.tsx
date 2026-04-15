@@ -1,3 +1,8 @@
+/**
+ * Main scanner screen. Manages the scan state machine and coordinates
+ * camera scanning, image scanning, and the modal flow.
+ */
+
 import React, { useState } from "react";
 import {
   View,

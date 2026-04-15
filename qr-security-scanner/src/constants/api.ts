@@ -1,13 +1,8 @@
 /**
- * API Configuration
+ * API configuration, sourced from app.json → expo.extra.
  *
- * Centralizes all API-related configuration.
- * Uses expo-constants to read values from app.json's `extra` field,
- * with sensible defaults for development.
- *
- * To configure for production:
- *   1. Set values in app.json → expo.extra
- *   2. Or use environment variables with EAS Build
+ * No hardcoded fallback for baseUrl: an unconfigured value produces a clear
+ * network error rather than silently hitting a stale developer address.
  */
 
 import Constants from "expo-constants";

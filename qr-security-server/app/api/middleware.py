@@ -1,10 +1,5 @@
 """
-Request Logging & Timing Middleware
-
-Adds to every request:
-- Unique request ID (X-Request-ID header)
-- Request/response logging with timing
-- Structured log output for production debugging
+Request logging middleware that assigns a unique request ID and records timing.
 """
 
 import logging
@@ -19,12 +14,6 @@ logger = logging.getLogger("app.middleware")
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """
-    Logs every request with:
-    - Method, path, status code
-    - Response time in ms
-    - Unique request ID for tracing
-    """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])

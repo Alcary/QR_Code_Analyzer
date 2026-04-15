@@ -1,23 +1,8 @@
 """
-SHAP Explainability Engine
+SHAP feature-attribution explanations for XGBoost predictions.
 
-Provides per-prediction feature-attribution explanations using
-SHAP (SHapley Additive exPlanations, Lundberg & Lee 2017).
-
-For XGBoost we use TreeExplainer — an exact, polynomial-time
-algorithm for tree ensembles that runs in O(TLD²) per prediction
-(T = number of trees, L = max leaves, D = max depth).
-
-Output format:
-    [
-        {"feature": "url_length",  "value": 0.12,  "direction": "risk"},
-        {"feature": "has_https",   "value": -0.08, "direction": "safe"},
-        ...
-    ]
-
-Each item shows how much a feature pushed the prediction away from
-the base rate (expected value).  Positive SHAP value → increases
-P(malicious); negative → decreases.
+Uses TreeExplainer — an exact, polynomial-time algorithm for tree ensembles.
+Positive SHAP values increase P(malicious); negative values decrease it.
 """
 
 import logging

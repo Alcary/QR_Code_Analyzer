@@ -1,3 +1,11 @@
+/**
+ * Gallery image QR scanner.
+ *
+ * Picks an image from the device library and decodes any QR code it contains.
+ * Retries at progressively smaller resolutions to handle dense QR codes that
+ * the native scanner misses at the original image size.
+ */
+
 import { useState } from 'react';
 import { Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';

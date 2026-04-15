@@ -1,3 +1,7 @@
+/**
+ * Confirmation modal shown before running a security scan on a URL.
+ */
+
 import React from "react";
 import {
   View,
@@ -103,7 +107,7 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.65)",
-    justifyContent: "center", // Centered card looks cleaner for alerts
+    justifyContent: "center",
     alignItems: "center",
     padding: 20,
   },
@@ -128,7 +132,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: "rgba(0, 122, 255, 0.1)", // Light blue bg
+    backgroundColor: "rgba(0, 122, 255, 0.1)",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -188,7 +192,7 @@ const styles = StyleSheet.create({
     flex: 1.5,
     paddingVertical: 14,
     borderRadius: 30,
-    backgroundColor: colors.primary, // Blue
+    backgroundColor: colors.primary,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",

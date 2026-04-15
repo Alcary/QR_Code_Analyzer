@@ -1,3 +1,10 @@
+"""
+FastAPI application entry point.
+
+Wires together middleware, routes, rate limiting, and the application lifespan
+(Redis connection, browser container, ML model loading).
+"""
+
 import asyncio
 import ipaddress
 import logging
@@ -233,7 +240,7 @@ rate_limiter = RateLimiter(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: validate config, load ML models."""
+    """Startup and shutdown: connect Redis, start browser container, load ML models."""
 
     # ── Production safety checks ──────────────────────────────
     if settings.ENVIRONMENT == "production":

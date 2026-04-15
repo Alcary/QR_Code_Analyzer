@@ -149,7 +149,6 @@ def test_network_risk_shortener_suppresses_cross_domain_redirect():
 
 
 def test_network_risk_content_flags_skipped_when_browser_succeeded():
-    """When browser analysis succeeded, content_flags are not scored (browser covers it)."""
     net = _clean_net()
     net.http.content_flags = ["password_field", "obfuscated_javascript"]
     risk, factors = _analyzer._compute_network_risk(
@@ -160,7 +159,6 @@ def test_network_risk_content_flags_skipped_when_browser_succeeded():
 
 
 def test_network_risk_content_flags_scored_in_fallback():
-    """When browser analysis failed, content_flags are scored as fallback."""
     net = _clean_net()
     net.http.content_flags = ["password_field", "obfuscated_javascript"]
     risk, factors = _analyzer._compute_network_risk(
@@ -317,21 +315,18 @@ def test_decide_moderate_tier_message():
 
 
 def test_decide_untrusted_non_shortener_message():
-    """UNTRUSTED domain with no url_shortener factor must NOT say 'shortener'."""
     _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[])
     assert "shortener" not in msg.lower()
     assert "low-trust" in msg.lower() or "low trust" in msg.lower()
 
 
 def test_decide_untrusted_shortener_factor_message():
-    """UNTRUSTED domain with url_shortener factor gets shortener-specific message."""
     shortener_factor = {"code": "url_shortener", "message": "URL shortener", "severity": "medium"}
     _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[shortener_factor])
     assert "shortener" in msg.lower()
 
 
 def test_decide_untrusted_other_factor_not_shortener_message():
-    """UNTRUSTED domain with a different risk factor does not trigger shortener message."""
     other_factor = {"code": "suspicious_tld", "message": "Suspicious TLD", "severity": "low"}
     _, msg = _decide_with_tier(ReputationTier.UNTRUSTED, factors=[other_factor])
     assert "shortener" not in msg.lower()

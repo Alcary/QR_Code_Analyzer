@@ -352,7 +352,8 @@ class NetworkInspector:
           following indefinitely.
         """
         MAX_REDIRECTS = 10
-        MAX_RESPONSE_BYTES = 50_000  # 50 KB cap on content inspection
+        # 50 KB cap on content inspection — prevents memory exhaustion from large bodies
+        MAX_RESPONSE_BYTES = 50_000
 
         result = HTTPResult()
         loop = asyncio.get_running_loop()

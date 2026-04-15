@@ -1,13 +1,12 @@
 /**
- * Scan History Storage Layer
- *
- * Persists QR scan results to device storage using AsyncStorage.
- * All operations are resilient: a corrupted store returns [] rather
- * than crashing the app.
+ * Scan history persistence via AsyncStorage.
  *
  * Keys:
- *   @qr_scan_history    — serialised HistoryItem[]
+ *   @qr_scan_history     — serialised HistoryItem[]
  *   @qr_history_settings — { enabled: boolean }
+ *
+ * All read operations return a safe default on any error so a corrupted
+ * store never crashes the app.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -45,6 +44,7 @@ export interface HistoryItem {
 
 const HISTORY_KEY = "@qr_scan_history";
 const SETTINGS_KEY = "@qr_history_settings";
+// Caps stored entries to avoid unbounded storage growth.
 const MAX_ITEMS = 100;
 
 // ── ID generation ─────────────────────────────────────────────

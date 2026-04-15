@@ -1,3 +1,8 @@
+/**
+ * Scan history list screen. Supports swipe-to-delete and a toggle to
+ * enable or disable history saving.
+ */
+
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,

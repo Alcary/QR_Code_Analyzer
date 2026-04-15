@@ -1,3 +1,7 @@
+"""
+Pydantic request/response schemas and URL validation for the scan API.
+"""
+
 import re
 from typing import Literal
 from urllib.parse import urlparse

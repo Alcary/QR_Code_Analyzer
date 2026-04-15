@@ -307,6 +307,8 @@ function parsePrefixedKeyValuePayload(
   return values;
 }
 
+// Splits on delimiter while honoring backslash escapes, as required by
+// WIFI and MATMSG QR payload formats (e.g. \; is a literal semicolon).
 function splitUnescaped(text: string, delimiter: string): string[] {
   const parts: string[] = [];
   let current = "";

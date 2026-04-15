@@ -113,14 +113,10 @@ def test_apple_official_not_flagged():
     assert _exact_brand("apple.com") == 0  # exempt — is_official_domain=True
 
 
+# Regression: lstrip("www.") would strip the 'w' from 'ww.paypal.com', leaving
+# 'w.paypal.com'. The fix uses startswith("www.")+[4:], so top_domain_under_public_suffix
+# correctly resolves to 'paypal.com' → is_official_domain=True → not flagged.
 def test_www_paypal_official_not_flagged():
-    """
-    Regression: www.paypal.com must be exempt.
-    The old lstrip("www.") bug would have stripped the 'w' from 'ww.paypal.com'
-    leaving 'w.paypal.com'. The current startswith("www.")+slice[4:] fix is correct.
-    top_domain_under_public_suffix of 'www.paypal.com' == 'paypal.com' which IS in
-    official_domains, so is_official_domain=True → not flagged.
-    """
     assert _exact_brand("www.paypal.com") == 0, (
         "www.paypal.com is an official PayPal domain and must not be flagged"
     )
@@ -131,22 +127,18 @@ def test_www_apple_official_not_flagged():
 
 
 def test_secure_apple_flagged():
-    """secure-apple.com is brand impersonation — hyphen-separated token."""
     assert _exact_brand("secure-apple.com") == 1
 
 
 def test_paypal_login_flagged():
-    """paypal-login.com is brand impersonation — token match."""
     assert _exact_brand("paypal-login.com") == 1
 
 
 def test_apple_fake_tld_flagged():
-    """apple.evil.io — 'apple' is a whole label, not official domain."""
     assert _exact_brand("apple.evil.io") == 1
 
 
 def test_login_paypal_subdomain_flagged():
-    """login.paypal.fake.com — paypal is a whole label, not official domain."""
     assert _exact_brand("login.paypal.fake.com") == 1
 
 
@@ -157,9 +149,8 @@ def test_char_sub_g00gle():
     assert detect_char_substitution("g00gle.com") is True
 
 
+# '1' in CONFUSABLES maps to 'l' → normalize_confusables("paypa1") == "paypal"
 def test_char_sub_paypa1():
-    """paypa1 → paypal via confusable '1'→'l', but '1' in CONFUSABLES maps to 'l'."""
-    # normalize_confusables("paypa1") → "paypal" which matches brand
     assert detect_char_substitution("paypa1.com") is True
 
 
@@ -182,12 +173,11 @@ def test_paypal_net_not_official_flagged():
 def test_paypal_official_not_flagged():
     assert _exact_brand("paypal.com") == 0
 
+# Cyrillic 'а' (U+0430) looks like Latin 'a'; normalize_confusables maps it,
+# so аpple-login.com normalizes to apple-login.com → brand "apple" matched via token.
 def test_char_sub_cyrillic_apple():
-    """а (Cyrillic) in domain → confusable substitution for 'apple'."""
-    # Use a domain where apple is a whole label after normalization
-    cyrillic_a = "\u0430"  # Cyrillic а looks like Latin a
-    domain = f"{cyrillic_a}pple-login.com"  # аpple-login.com → apple-login → token "apple"
-    # normalize_confusables("аpple-login") → "apple-login", brand "apple" found via token
+    cyrillic_a = "\u0430"
+    domain = f"{cyrillic_a}pple-login.com"
     assert detect_char_substitution(domain) is True
 
 

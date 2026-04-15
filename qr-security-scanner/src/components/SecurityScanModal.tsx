@@ -1,3 +1,8 @@
+/**
+ * Bottom-sheet modal that runs the security scan and displays the result.
+ * Caches the last URL so content stays visible during the close animation.
+ */
+
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -412,19 +417,16 @@ export default function SecurityScanModal({
       >
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
-            {/* Icon */}
             <View style={styles.confirmIconCircle}>
               <Ionicons name="warning" size={32} color={colors.error} />
             </View>
 
-            {/* Text */}
             <Text style={styles.confirmTitle}>Dangerous Website</Text>
             <Text style={styles.confirmBody}>
               Our analysis flagged this link as malicious. Opening it may expose
               you to phishing, malware, or data theft.
             </Text>
 
-            {/* URL pill */}
             <View style={styles.confirmUrlPill}>
               <Ionicons name="warning-outline" size={12} color={colors.error} />
               <Text
@@ -436,7 +438,6 @@ export default function SecurityScanModal({
               </Text>
             </View>
 
-            {/* Buttons */}
             <View style={styles.confirmButtons}>
               <TouchableOpacity
                 style={styles.confirmSecondaryBtn}

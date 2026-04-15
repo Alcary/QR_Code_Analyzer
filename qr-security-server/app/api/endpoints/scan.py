@@ -1,3 +1,5 @@
+"""POST /scan endpoint — delegates to the multi-layer URL analysis pipeline."""
+
 import logging
 
 from fastapi import APIRouter, Depends

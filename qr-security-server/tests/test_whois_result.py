@@ -24,7 +24,6 @@ def _inspector() -> NetworkInspector:
 
 @pytest.mark.asyncio
 async def test_successful_lookup_with_date_not_failed():
-    """A clean WHOIS response with a creation date sets lookup_failed=False."""
     from datetime import datetime, timezone
 
     mock_w = MagicMock()
@@ -41,8 +40,8 @@ async def test_successful_lookup_with_date_not_failed():
 
 
 @pytest.mark.asyncio
+# creation_date may be None from the WHOIS library — lookup_failed must still be False
 async def test_successful_lookup_no_date_not_failed():
-    """WHOIS succeeds but returns no creation date — lookup_failed stays False."""
     mock_w = MagicMock()
     mock_w.creation_date = None
     mock_w.registrar = "Some Registrar"
@@ -60,10 +59,11 @@ async def test_successful_lookup_no_date_not_failed():
 
 
 @pytest.mark.asyncio
+# asyncio.TimeoutError is the specific exception type raised by the timeout wrapper
 async def test_timeout_sets_lookup_failed():
-    """asyncio.TimeoutError during WHOIS lookup sets lookup_failed=True."""
     inspector = _inspector()
-    inspector.whois_timeout = 0.001  # force immediate timeout
+    # 0.001 s forces an immediate timeout
+    inspector.whois_timeout = 0.001
 
     with patch("whois.whois", side_effect=lambda d: asyncio.sleep(10)):
         result = await inspector._check_whois("slow-domain.com")
@@ -75,7 +75,6 @@ async def test_timeout_sets_lookup_failed():
 
 @pytest.mark.asyncio
 async def test_generic_exception_sets_lookup_failed():
-    """Any unexpected exception during lookup sets lookup_failed=True."""
     inspector = _inspector()
     with patch("whois.whois", side_effect=ConnectionRefusedError("no route to host")):
         result = await inspector._check_whois("unreachable.com")
@@ -87,7 +86,6 @@ async def test_generic_exception_sets_lookup_failed():
 
 @pytest.mark.asyncio
 async def test_whois_not_installed_sets_lookup_failed():
-    """Missing python-whois library sets lookup_failed=True."""
     inspector = _inspector()
     with patch.dict("sys.modules", {"whois": None}):
         result = await inspector._check_whois("example.com")
@@ -100,7 +98,6 @@ async def test_whois_not_installed_sets_lookup_failed():
 
 
 def test_whoisresult_default_lookup_failed_is_false():
-    """WHOISResult() initialises with lookup_failed=False."""
     r = WHOISResult()
     assert r.lookup_failed is False
 

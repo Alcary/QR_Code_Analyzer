@@ -1,12 +1,8 @@
 """
-Logging Configuration
+Logging configuration loader.
 
-Loads logging.yaml from the server root.  Creates the logs/ directory
-automatically if it does not exist.
-
-Usage (call once at application startup, before anything else logs):
-    from app.core.logging_config import setup_logging
-    setup_logging()
+Reads logging.yaml from the server root and creates the logs/ directory
+automatically. Falls back to basicConfig if the file is missing.
 """
 
 import logging
