@@ -19,7 +19,7 @@ import RiskScoreRing from "./RiskScoreRing";
 import TrustIndicator from "./TrustIndicator";
 import ExplainabilityCard from "./ExplainabilityCard";
 import NetworkBadge from "./NetworkBadge";
-import MLStat from "./MLStat";
+import AnalysisLayers from "./AnalysisLayers";
 
 // ── Verdict config (plain-English, user-facing) ───────────────
 
@@ -94,6 +94,7 @@ export default function ScanResultView({
   const ml = details?.ml;
   const domain = details?.domain;
   const network = details?.network;
+  const browser = details?.browser;
   const riskFactors = details?.risk_factors ?? [];
   const explanation = ml?.explanation ?? [];
   const analysisMs = details?.analysis_time_ms;
@@ -273,20 +274,11 @@ export default function ScanResultView({
             </View>
           )}
 
-          {/* ML Model Details */}
-          {ml && (
+          {/* Analysis Layers */}
+          {(ml || domain || network || browser) && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>ML Model Details</Text>
-              <View style={styles.mlRow}>
-                <MLStat
-                  label="XGBoost"
-                  value={`${(ml.xgb_score * 100).toFixed(1)}%`}
-                />
-                <MLStat
-                  label="Trust-dampened"
-                  value={`${((ml.dampened_score ?? 0) * 100).toFixed(1)}%`}
-                />
-              </View>
+              <Text style={styles.sectionTitle}>Analysis Methods</Text>
+              <AnalysisLayers ml={ml} domain={domain} network={network} browser={browser} />
             </View>
           )}
 
@@ -434,10 +426,6 @@ const styles = StyleSheet.create({
   networkGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-  },
-  mlRow: {
-    flexDirection: "row",
     gap: 8,
   },
   timing: {

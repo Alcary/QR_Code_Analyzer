@@ -32,7 +32,7 @@ import {
 import RiskScoreRing from "../src/components/RiskScoreRing";
 import TrustIndicator from "../src/components/TrustIndicator";
 import NetworkBadge from "../src/components/NetworkBadge";
-import MLStat from "../src/components/MLStat";
+import AnalysisLayers from "../src/components/AnalysisLayers";
 import type { RiskFactor } from "../src/services/apiService";
 import { normalizeWebUrl, parseQrPayload } from "../src/utils/validation";
 
@@ -179,6 +179,7 @@ export default function HistoryDetailScreen() {
   const ml = details?.ml;
   const domain = details?.domain;
   const network = details?.network;
+  const browser = details?.browser;
   const parsedPayload = parseQrPayload(item.rawPayload);
   const riskFactors = sortBySeverity(details?.risk_factors ?? []);
   const status = result.status;
@@ -518,20 +519,11 @@ export default function HistoryDetailScreen() {
               </View>
             )}
 
-            {/* ─── ML Details ─── */}
-            {ml && (
+            {/* ─── Analysis Layers ─── */}
+            {(ml || domain || network || browser) && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>ML Model Details</Text>
-                <View style={styles.mlRow}>
-                  <MLStat
-                    label="XGBoost"
-                    value={`${(ml.xgb_score * 100).toFixed(1)}%`}
-                  />
-                  <MLStat
-                    label="Trust-dampened"
-                    value={`${((ml.dampened_score ?? 0) * 100).toFixed(1)}%`}
-                  />
-                </View>
+                <Text style={styles.sectionTitle}>Analysis Methods</Text>
+                <AnalysisLayers ml={ml} domain={domain} network={network} browser={browser} />
               </View>
             )}
           </>
@@ -838,10 +830,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-  },
-  mlRow: {
-    flexDirection: "row",
-    gap: 12,
   },
   // ── Sticky footer ──
   footer: {

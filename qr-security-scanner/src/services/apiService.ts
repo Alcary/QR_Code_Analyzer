@@ -58,10 +58,34 @@ export interface NetworkDetails {
   content_flags: string[];
 }
 
+export interface BrowserDetails {
+  has_login_form: boolean;
+  has_credit_card_input: boolean;
+  has_ssn_input: boolean;
+  external_form_action: boolean;
+  total_script_count: number;
+  external_script_domains: number;
+  has_js_obfuscation: boolean;
+  disables_right_click: boolean;
+  iframe_count: number;
+  external_iframe_count: number;
+  brand_domain_mismatch: boolean;
+  impersonated_brand?: string | null;
+  has_urgency_text: boolean;
+  has_threat_text: boolean;
+  page_title: string;
+  total_requests: number;
+  external_domain_count: number;
+  domain_changed: boolean;
+  final_url?: string | null;
+  page_load_ms: number;
+}
+
 export interface ScanDetails {
   ml?: MLDetails | null;
   domain?: DomainDetails | null;
   network?: NetworkDetails | null;
+  browser?: BrowserDetails | null;
   risk_factors: RiskFactor[];
   analysis_time_ms?: number | null;
 }

@@ -10,7 +10,6 @@ import {
   Modal,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
   Linking,
 } from "react-native";
 import Animated, {
@@ -18,6 +17,9 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withTiming,
+  withRepeat,
+  withSequence,
+  Easing,
   FadeIn,
 } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
@@ -113,6 +115,48 @@ function StickyFooter({ status, onOpenLink, onClose }: FooterProps) {
             </TouchableOpacity>
           </>
         )}
+      </View>
+    </View>
+  );
+}
+
+// ── Shield spinner ────────────────────────────────────────────
+
+function ShieldSpinner() {
+  const rotation = useSharedValue(0);
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    rotation.value = withRepeat(
+      withTiming(360, { duration: 2000, easing: Easing.linear }),
+      -1,
+      false,
+    );
+    scale.value = withRepeat(
+      withSequence(
+        withTiming(1.08, { duration: 800 }),
+        withTiming(1.0, { duration: 800 }),
+      ),
+      -1,
+      false,
+    );
+  }, []);
+
+  const spinStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
+
+  const pulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <View style={styles.spinnerContainer}>
+      <Animated.View style={[styles.spinnerArc, spinStyle]} />
+      <View style={[styles.iconCircle, { backgroundColor: colors.infoBg, marginBottom: 0 }]}>
+        <Animated.View style={pulseStyle}>
+          <Ionicons name="shield-outline" size={36} color={colors.primary} />
+        </Animated.View>
       </View>
     </View>
   );
@@ -264,11 +308,7 @@ export default function SecurityScanModal({
 
           {status === "analyzing" ? (
             <View style={styles.loadingContainer}>
-              <View
-                style={[styles.iconCircle, { backgroundColor: colors.infoBg }]}
-              >
-                <ActivityIndicator size="large" color={colors.primary} />
-              </View>
+              <ShieldSpinner />
               <Text style={styles.loadingTitle}>Analyzing URL</Text>
               <Text style={styles.loadingSubtitle}>
                 Running ML prediction, network checks, and domain trust
@@ -488,6 +528,22 @@ const styles = StyleSheet.create({
     top: 16,
     padding: 6,
     zIndex: 10,
+  },
+  spinnerContainer: {
+    width: 88,
+    height: 88,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  spinnerArc: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 3,
+    borderColor: colors.primary,
+    borderTopColor: "transparent",
+    position: "absolute",
   },
   loadingContainer: {
     alignItems: "center",
