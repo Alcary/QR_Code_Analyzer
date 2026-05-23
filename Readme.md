@@ -14,6 +14,7 @@ This project consists of two main components:
 ### Mobile App
 
 - Real-time QR code scanning via camera
+- Classifying QR content (WI-FI, email, SMS, calendar or location) with appropriate suggested actions
 - Image-based QR scanning from the photo gallery
 - Confirmation step before running security analysis on URLs
 - Risk score visualization with explainability cards showing threat indicators
@@ -52,11 +53,11 @@ Three Docker services run together via `docker-compose`:
 ### Scoring weights
 
 When the browser service is available:
-- `0.40 ML + 0.20 network + 0.25 browser + 0.15 heuristic`
+- `0.50 dampened ML + 0.20 network + 0.15 browser + 0.15 heuristic`
 
 When the browser service is unavailable (fallback):
-- `0.55 ML + 0.25 network + 0.20 heuristic`
+- `0.55 dampened ML + 0.25 network + 0.20 heuristic`
 
 ### Verdicts
 
-The backend returns one of three statuses: `safe`, `suspicious`, or `danger`.
+The backend returns one of three statuses: `safe`, `suspicious`, `unreachable` or `danger`.

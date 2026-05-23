@@ -348,19 +348,19 @@ def compute_domain_trust(
     # Map to qualitative tier
     if dampening <= 0.35:
         tier = ReputationTier.TRUSTED
-        desc = f"High trust (score={trust:.2f}): established domain"
+        desc = "Established domain with strong trust signals"
     elif dampening <= 0.60:
         tier = ReputationTier.MODERATE
-        desc = f"Moderate trust (score={trust:.2f})"
+        desc = "Some positive trust signals were found"
     elif dampening <= 0.80:
         tier = ReputationTier.NEUTRAL
-        desc = f"Neutral trust (score={trust:.2f}): limited signals"
+        desc = "Limited trust signals available"
     else:
         tier = ReputationTier.UNTRUSTED
-        desc = f"Low trust (score={trust:.2f}): weak or missing signals"
+        desc = "Weak or missing trust signals"
 
     if penalty > 0:
-        desc += " — auth-bait path detected"
+        desc += " - sign-in or payment-related path detected"
 
     logger.debug(
         "Domain trust %s: whois=%.2f ssl=%.2f dns=%.2f struct=%.2f "

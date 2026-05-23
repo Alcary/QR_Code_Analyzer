@@ -16,7 +16,7 @@ Analysis pipeline:
 8. Browser risk signals (when available)
 9. Heuristic risk factors (URL-derived + network + browser)
 10. Risk score computation combining all signal layers
-11. Final verdict: safe / suspicious / danger
+11. Final verdict: safe / suspicious / danger / unreachable
 
 """
 
@@ -519,9 +519,9 @@ class URLAnalyzer:
     ) -> tuple[str, str]:
         """Return (status, message) based on all signals."""
 
-        # Hard override: DNS failure = domain doesn't exist
+        # Availability issue: domain does not exist in DNS
         if net.dns.error == "domain_not_found":
-            return "danger", "Domain does not exist (DNS failure)"
+            return "unreachable", "Site is unreachable — domain does not exist"
 
         # Hard override: SSRF attempt — URL targeted internal/private network
         if net.http.error in ("ssrf_blocked", "ssrf_check_failed"):
@@ -538,8 +538,8 @@ class URLAnalyzer:
         # Availability issue: the site could not be reached in time
         if net.http.error in ("site_unreachable", "timeout"):
             if net.dns.resolved:
-                return "suspicious", "Site is currently unreachable; security verdict may be incomplete"
-            return "suspicious", "Site is unreachable and DNS could not be confirmed"
+                return "unreachable", "Site is currently unreachable"
+            return "unreachable", "Site is unreachable and DNS could not be confirmed"
 
         # Score-based
         if final_score >= self.DANGER_THRESHOLD:

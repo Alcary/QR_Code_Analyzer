@@ -133,7 +133,7 @@ class ScanDetails(BaseModel):
 
 
 class ScanResult(BaseModel):
-    status: Literal["safe", "suspicious", "danger"]
+    status: Literal["safe", "suspicious", "danger", "unreachable"]
     message: str
     risk_score: float = Field(0.0, description="Overall risk score 0.0-1.0")
     details: ScanDetails | None = None

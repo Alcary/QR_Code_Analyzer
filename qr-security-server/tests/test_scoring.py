@@ -242,8 +242,8 @@ def test_decide_hard_override_dns_not_found():
     net = _clean_net()
     net.dns.error = "domain_not_found"
     status, message = _decide(0.0, net=net)
-    assert status == "danger"
-    assert "DNS" in message or "exist" in message.lower()
+    assert status == "unreachable"
+    assert "unreachable" in message.lower() or "exist" in message.lower()
 
 
 def test_decide_hard_override_ssrf_blocked():
@@ -275,21 +275,21 @@ def test_decide_4xx_not_a_hard_override():
     assert status == "safe"  # 404 is not a hard override
 
 
-def test_decide_unreachable_with_dns_failure_is_suspicious():
+def test_decide_unreachable_with_dns_failure_is_unreachable():
     net = _clean_net()
     net.http.error = "site_unreachable"
     net.dns.resolved = False
     status, message = _decide(0.10, net=net)
-    assert status == "suspicious"
+    assert status == "unreachable"
     assert "unreachable" in message.lower()
 
 
-def test_decide_timeout_is_suspicious():
+def test_decide_timeout_is_unreachable():
     net = _clean_net()
     net.http.error = "timeout"
     status, message = _decide(0.10, net=net)
-    assert status == "suspicious"
-    assert "incomplete" in message.lower() or "unreachable" in message.lower()
+    assert status == "unreachable"
+    assert "unreachable" in message.lower()
 
 
 # ── _decide() — UNTRUSTED tier messages ──────────────────────

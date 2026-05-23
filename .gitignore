@@ -20,6 +20,7 @@ qr-security-scanner/npm-debug.*
 qr-security-scanner/yarn-debug.*
 qr-security-scanner/yarn-error.*
 qr-security-scanner/*.tsbuildinfo
+qr-security-scanner/.tmp-tests/
 qr-security-scanner/app-example/
 qr-security-scanner/ios/
 qr-security-scanner/android/
