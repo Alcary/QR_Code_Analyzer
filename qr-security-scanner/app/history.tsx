@@ -3,10 +3,9 @@
  * enable or disable history saving.
  */
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Modal,
   Platform,
   Pressable,
@@ -17,6 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Animated, { FadeOutLeft, LinearTransition } from "react-native-reanimated";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -88,18 +88,50 @@ const STATUS_CONFIG = {
     label: "Not Analyzed",
     icon: "information-circle" as const,
   },
+  unreachable: {
+    color: colors.textSecondary,
+    label: "Unreachable",
+    icon: "cloud-offline" as const,
+  },
 } as const;
 
 // ── Favicon avatar ────────────────────────────────────────────
 
-function FaviconAvatar({ label }: { label: string }) {
-  const letter = label
-    .replace(/^www\./, "")
-    .charAt(0)
-    .toUpperCase();
+function getHistoryTypeIcon(item: HistoryItem): keyof typeof Ionicons.glyphMap {
+  if (item.normalizedUrl) return "globe-outline";
+
+  const payloadType = parseQrPayload(item.rawPayload).type;
+  switch (payloadType) {
+    case "url":
+      return "globe-outline";
+    case "wifi":
+      return "wifi-outline";
+    case "email":
+      return "mail-outline";
+    case "phone":
+      return "call-outline";
+    case "sms":
+      return "chatbubble-outline";
+    case "geo":
+      return "location-outline";
+    case "contact":
+      return "person-outline";
+    case "calendar":
+      return "calendar-outline";
+    case "text":
+    default:
+      return "document-text-outline";
+  }
+}
+
+function TypeIconTile({ item }: { item: HistoryItem }) {
   return (
     <View style={styles.cardIconWrap}>
-      <Text style={styles.avatarLetter}>{letter}</Text>
+      <Ionicons
+        name={getHistoryTypeIcon(item)}
+        size={19}
+        color={colors.textSecondary}
+      />
     </View>
   );
 }
@@ -119,8 +151,8 @@ function HistoryListItem({ item, onPress }: ListItemProps) {
       {/* Left accent bar */}
       <View style={[styles.cardAccent, { backgroundColor: cfg.color }]} />
 
-      {/* Favicon avatar */}
-      <FaviconAvatar label={displayUrl(item)} />
+      {/* Type icon */}
+      <TypeIconTile item={item} />
 
       {/* Middle: url + status + time */}
       <View style={styles.cardMiddle}>
@@ -163,6 +195,7 @@ export default function HistoryScreen() {
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showClearModal, setShowClearModal] = useState(false);
+  const openSwipeableRef = useRef<Swipeable | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -353,34 +386,46 @@ export default function HistoryScreen() {
           </View>
         </View>
       ) : (
-        <FlatList
+        <Animated.FlatList
           data={items}
           keyExtractor={(item) => item.id}
+          itemLayoutAnimation={LinearTransition}
           ListHeaderComponent={ListHeader}
           renderItem={({ item }) => (
-            <Swipeable
-              renderRightActions={() => (
-                <TouchableOpacity
-                  style={styles.deleteAction}
-                  onPress={() => handleDeleteItem(item.id)}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons
-                    name="trash-outline"
-                    size={22}
-                    color={colors.white}
-                  />
-                </TouchableOpacity>
-              )}
-              overshootRight={false}
-              friction={2}
-              rightThreshold={60}
-            >
-              <HistoryListItem
-                item={item}
-                onPress={() => handleItemPress(item)}
-              />
-            </Swipeable>
+            <Animated.View exiting={FadeOutLeft.duration(250)}>
+              <Swipeable
+                renderRightActions={() => (
+                  <TouchableOpacity
+                    style={styles.deleteAction}
+                    onPress={() => handleDeleteItem(item.id)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={22}
+                      color={colors.white}
+                    />
+                  </TouchableOpacity>
+                )}
+                onSwipeableOpen={(_direction, swipeable) => {
+                  openSwipeableRef.current?.close();
+                  openSwipeableRef.current = swipeable;
+                }}
+                onSwipeableClose={(_direction, swipeable) => {
+                  if (openSwipeableRef.current === swipeable) {
+                    openSwipeableRef.current = null;
+                  }
+                }}
+                overshootRight={false}
+                friction={2}
+                rightThreshold={60}
+              >
+                <HistoryListItem
+                  item={item}
+                  onPress={() => handleItemPress(item)}
+                />
+              </Swipeable>
+            </Animated.View>
           )}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
@@ -574,19 +619,13 @@ const styles = StyleSheet.create({
     marginRight: 12,
     backgroundColor: colors.card,
   },
-  avatarLetter: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.textSecondary,
-    letterSpacing: -0.3,
-  },
   deleteAction: {
     backgroundColor: colors.error,
     justifyContent: "center",
     alignItems: "center",
-    width: 72,
-    borderRadius: 16,
-    marginLeft: 8,
+    width: 76,
+    borderTopRightRadius: 16,
+    borderBottomRightRadius: 16,
   },
   cardMiddle: {
     flex: 1,

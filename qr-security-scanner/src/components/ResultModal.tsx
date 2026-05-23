@@ -1,26 +1,50 @@
 /**
  * Bottom-sheet modal for non-URL QR payloads (Wi-Fi, contact, SMS, etc.).
- * Displays parsed fields and the raw QR content; no backend call is made.
+ * Displays parsed non-URL payloads and type-specific actions; no backend call is made.
  */
 
 import React from 'react';
-import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, Platform, Linking, Share } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { scannerColors as colors } from '../constants/theme';
 import { SCREEN_WIDTH, SCREEN_HEIGHT } from '../constants/layout';
-import { parseQrPayload } from '../utils/validation';
+import { parseQrPayload, type QrExtra } from '../utils/validation';
+import {
+  buildMailtoUrl,
+  buildMapsUrl,
+  buildPayloadSummary,
+  buildPhoneUrl,
+  buildShareText,
+  buildSmsUrl,
+  createCalendarEvent,
+  extractWifiPassword,
+  presentContactForm,
+} from '../utils/qrActions';
+import { showNativeActionFallback } from '../utils/nativeActionFallback';
 
 interface ResultModalProps {
   visible: boolean;
   data: string | null;
+  extra?: QrExtra;
   onClose: () => void;
   onScanAnother: () => void;
 }
 
-export default function ResultModal({ visible, data, onClose, onScanAnother }: ResultModalProps) {
-  const parsedPayload = parseQrPayload(data);
+export default function ResultModal({ visible, data, extra, onClose, onScanAnother }: ResultModalProps) {
+  const insets = useSafeAreaInsets();
+  const parsedPayload = parseQrPayload(data, extra);
+  const isWifiPayload = parsedPayload.type === "wifi";
+  const isEmailPayload = parsedPayload.type === "email";
+  const isPhonePayload = parsedPayload.type === "phone";
+  const isSmsPayload = parsedPayload.type === "sms";
+  const isGeoPayload = parsedPayload.type === "geo";
+  const isContactPayload = parsedPayload.type === "contact";
+  const isCalendarPayload = parsedPayload.type === "calendar";
+  const isTextPayload = parsedPayload.type === "text";
+  const shareText = buildShareText(parsedPayload);
 
   const handleCopyText = async () => {
     if (data) {
@@ -29,10 +53,174 @@ export default function ResultModal({ visible, data, onClose, onScanAnother }: R
     }
   };
 
+  const handleShare = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Share.share({ message: shareText, title: parsedPayload.label });
+  };
+
   const handlePress = (action: () => void) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     action();
   };
+
+  const handleConnectWifi = async () => {
+    const password = extractWifiPassword(data, extra);
+    if (password) {
+      await Clipboard.setStringAsync(password);
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    if (Platform.OS === "android" && Linking.sendIntent) {
+      await Linking.sendIntent("android.settings.WIFI_SETTINGS");
+      return;
+    }
+
+    if (Platform.OS === "ios") {
+      const wifiSettingsUrl = "App-Prefs:WIFI";
+      const canOpenWifiSettings = await Linking.canOpenURL(wifiSettingsUrl);
+      if (canOpenWifiSettings) {
+        await Linking.openURL(wifiSettingsUrl);
+        return;
+      }
+    }
+
+    await Linking.openSettings();
+  };
+
+  const handleOpenEmail = async () => {
+    const mailtoUrl = buildMailtoUrl(parsedPayload);
+    if (!mailtoUrl) {
+      await handleCopyText();
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Linking.openURL(mailtoUrl);
+  };
+
+  const handleCallPhone = async () => {
+    const phoneUrl = buildPhoneUrl(parsedPayload);
+    if (!phoneUrl) {
+      await handleCopyText();
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Linking.openURL(phoneUrl);
+  };
+
+  const handleSendSms = async () => {
+    const smsUrl = buildSmsUrl(parsedPayload);
+    if (!smsUrl) {
+      await handleCopyText();
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Linking.openURL(smsUrl);
+  };
+
+  const handleOpenMaps = async () => {
+    const mapsUrl = buildMapsUrl(parsedPayload);
+    if (!mapsUrl) {
+      await handleCopyText();
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Linking.openURL(mapsUrl);
+  };
+
+  const handleSaveContact = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await presentContactForm(parsedPayload);
+      return;
+    } catch (error) {
+      await Clipboard.setStringAsync(buildPayloadSummary(parsedPayload));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showNativeActionFallback({
+        error,
+        title: "Could Not Open Contacts",
+        permissionBody:
+          "Contacts permission is needed to save this contact. The contact details were copied instead.",
+        blockedBody:
+          "Contacts permission is turned off for this app. Open Settings to enable it. The contact details were copied instead.",
+        unavailableBody:
+          "Contacts are not available in this app build. Reinstall the latest APK if you just added this feature. The contact details were copied instead.",
+        fallbackBody: "The contact details were copied instead.",
+      });
+    }
+  };
+
+  const handleAddEvent = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await createCalendarEvent(parsedPayload);
+      return;
+    } catch (error) {
+      await Clipboard.setStringAsync(buildPayloadSummary(parsedPayload));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showNativeActionFallback({
+        error,
+        title: "Could Not Open Calendar",
+        permissionBody:
+          "Calendar permission is needed to add this event. The event details were copied instead.",
+        blockedBody:
+          "Calendar permission is turned off for this app. Open Settings to enable it. The event details were copied instead.",
+        unavailableBody:
+          "Calendar is not available in this app build. Reinstall the latest APK if you just added this feature. The event details were copied instead.",
+        fallbackBody: "The event details were copied instead.",
+      });
+    }
+  };
+
+  const primaryAction = isWifiPayload
+    ? handleConnectWifi
+    : isEmailPayload
+      ? handleOpenEmail
+      : isPhonePayload
+        ? handleCallPhone
+        : isSmsPayload
+          ? handleSendSms
+          : isGeoPayload
+            ? handleOpenMaps
+            : isContactPayload
+              ? handleSaveContact
+              : isCalendarPayload
+                ? handleAddEvent
+                : handleCopyText;
+  const primaryIcon = isWifiPayload
+    ? "wifi-outline"
+    : isEmailPayload
+      ? "mail-outline"
+      : isPhonePayload
+        ? "call-outline"
+        : isSmsPayload
+          ? "chatbubble-outline"
+          : isGeoPayload
+            ? "map-outline"
+            : isContactPayload
+              ? "person-add-outline"
+              : isCalendarPayload
+                ? "calendar-outline"
+                : "copy-outline";
+  const primaryLabel = isWifiPayload
+    ? "Connect"
+    : isEmailPayload
+      ? "Open Email"
+      : isPhonePayload
+        ? "Call"
+        : isSmsPayload
+          ? "Send SMS"
+          : isGeoPayload
+            ? "Open Maps"
+            : isContactPayload
+              ? "Save Contact"
+              : isCalendarPayload
+                ? "Add Event"
+                : "Copy Text";
 
   return (
     <Modal
@@ -42,12 +230,12 @@ export default function ResultModal({ visible, data, onClose, onScanAnother }: R
       onRequestClose={onClose}
     >
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
+        <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
           <View style={styles.modalHeader}>
             <View style={styles.titleBlock}>
               <Text style={styles.modalEyebrow}>{parsedPayload.label}</Text>
               <Text style={styles.modalTitle}>
-                This QR code contains {parsedPayload.label.toLowerCase()} data and is not analyzed for link security.
+                This QR code contains {parsedPayload.label.toLowerCase()} data and is not being analyzed for security.
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
@@ -66,21 +254,42 @@ export default function ResultModal({ visible, data, onClose, onScanAnother }: R
             </View>
           )}
 
-          <ScrollView style={styles.textScrollContainer} showsVerticalScrollIndicator={true}>
-            <Text style={styles.rawTitle}>Raw QR Content</Text>
-            <Text style={styles.fullText} selectable={true}>
-              {data}
-            </Text>
-          </ScrollView>
+          {isTextPayload && (
+            <View style={styles.messageSection}>
+              <Text style={styles.messageLabel}>Message</Text>
+              <Text style={styles.messageText} selectable>
+                {parsedPayload.displayValue}
+              </Text>
+            </View>
+          )}
 
           <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.copyButton} onPress={handleCopyText} activeOpacity={0.8}>
-              <Ionicons name="copy-outline" size={20} color={colors.white} />
-              <Text style={styles.copyButtonText}>Copy Text</Text>
+            <TouchableOpacity
+              style={styles.primaryActionButton}
+              onPress={primaryAction}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={primaryIcon}
+                size={20}
+                color={colors.white}
+              />
+              <Text style={styles.actionButtonText}>{primaryLabel}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.doneButton} onPress={() => handlePress(onScanAnother)} activeOpacity={0.8}>
               <Text style={styles.doneButtonText}>Scan Another</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.shareActionWrap}>
+            <TouchableOpacity
+              style={styles.shareButton}
+              onPress={handleShare}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="share-social-outline" size={18} color={colors.primary} />
+              <Text style={styles.shareButtonText}>Share</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -100,7 +309,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 25,
     borderTopRightRadius: 25,
     maxHeight: SCREEN_HEIGHT * 0.8,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -160,30 +368,54 @@ const styles = StyleSheet.create({
     color: colors.textDark,
     fontWeight: '600',
   },
-  textScrollContainer: {
-    maxHeight: SCREEN_HEIGHT * 0.5,
-    paddingHorizontal: SCREEN_WIDTH * 0.05,
-    paddingVertical: SCREEN_HEIGHT * 0.025,
+  messageSection: {
+    marginHorizontal: SCREEN_WIDTH * 0.05,
+    marginTop: SCREEN_HEIGHT * 0.02,
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  rawTitle: {
+  messageLabel: {
     fontSize: 12,
     fontWeight: '700',
     color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 10,
+    marginBottom: 6,
   },
-  fullText: {
+  messageText: {
     fontSize: SCREEN_WIDTH * 0.04,
-    color: colors.textDark, 
-    lineHeight: SCREEN_WIDTH * 0.06,
+    color: colors.textDark,
+    fontWeight: '600',
+    lineHeight: SCREEN_WIDTH * 0.058,
   },
   modalActions: {
     flexDirection: 'row',
     padding: SCREEN_WIDTH * 0.05,
+    paddingBottom: 10,
     gap: 12,
   },
-  copyButton: {
+  shareActionWrap: {
+    paddingHorizontal: SCREEN_WIDTH * 0.05,
+  },
+  shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: `${colors.primary}30`,
+    backgroundColor: colors.white,
+    paddingVertical: SCREEN_HEIGHT * 0.016,
+    borderRadius: 12,
+    gap: 8,
+  },
+  shareButtonText: {
+    color: colors.primary,
+    fontSize: SCREEN_WIDTH * 0.04,
+    fontWeight: '600',
+  },
+  primaryActionButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -193,7 +425,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 8,
   },
-  copyButtonText: {
+  actionButtonText: {
     color: colors.white,
     fontSize: SCREEN_WIDTH * 0.04,
     fontWeight: '600',

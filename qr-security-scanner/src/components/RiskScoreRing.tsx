@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { scannerColors as colors } from '../constants/theme';
 
@@ -9,7 +9,7 @@ interface RiskScoreRingProps {
   /** Ring diameter */
   size?: number;
   /** Status from server */
-  status?: 'safe' | 'suspicious' | 'danger' | 'info';
+  status?: 'safe' | 'suspicious' | 'danger' | 'info' | 'unreachable';
 }
 
 function getColor(status?: string, score?: number): string {
@@ -17,6 +17,7 @@ function getColor(status?: string, score?: number): string {
   if (status === 'danger') return colors.error;
   if (status === 'suspicious') return colors.warning;
   if (status === 'info') return colors.primary;
+  if (status === 'unreachable') return colors.textSecondary;
   if (score !== undefined) {
     if (score < 0.30) return colors.success;
     if (score < 0.60) return colors.warning;
@@ -27,6 +28,7 @@ function getColor(status?: string, score?: number): string {
 
 function getIcon(status?: string, score?: number): keyof typeof Ionicons.glyphMap {
   if (status === 'info') return 'information-circle';
+  if (status === 'unreachable') return 'cloud-offline';
   if (status === 'safe' || (score !== undefined && score < 0.30)) return 'shield-checkmark';
   if (status === 'danger' || (score !== undefined && score >= 0.60)) return 'alert-circle';
   return 'warning';

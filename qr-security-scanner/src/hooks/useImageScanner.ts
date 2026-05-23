@@ -12,9 +12,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import * as ImageManipulator from 'expo-image-manipulator';
+import type { QrExtra } from '../utils/validation';
 
 export const useImageScanner = (
-  onScanSuccess: (data: string) => void,
+  onScanSuccess: (data: string, extra?: QrExtra) => void,
   onNoQrFound?: () => void,
 ) => {
   const [isScanningImage, setIsScanningImage] = useState(false);
@@ -59,9 +60,10 @@ export const useImageScanner = (
           setIsScanningImage(false);
 
           if (scannedResults.length > 0) {
-            const qrData = scannedResults[0].data;
+            const { data, raw, extra } = scannedResults[0];
+            const payload = typeof raw === "string" && raw.trim() ? raw : data;
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            onScanSuccess(qrData);
+            onScanSuccess(payload, extra as QrExtra | undefined);
           } else {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
             if (onNoQrFound) {

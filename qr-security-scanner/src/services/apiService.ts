@@ -91,7 +91,7 @@ export interface ScanDetails {
 }
 
 export interface ScanResult {
-  status: "safe" | "danger" | "suspicious";
+  status: "safe" | "danger" | "suspicious" | "unreachable";
   message: string;
   risk_score: number;
   details?: ScanDetails | null;

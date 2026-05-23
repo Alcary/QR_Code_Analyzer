@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   Modal,
 } from "react-native";
+import * as Network from "expo-network";
 import { CameraView } from "expo-camera";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -34,7 +35,7 @@ import SecurityScanModal from "../src/components/SecurityScanModal";
 
 // Constants & Utils
 import { scannerColors as colors } from "../src/constants/theme";
-import { parseQrPayload } from "../src/utils/validation";
+import { parseQrPayload, type QrExtra } from "../src/utils/validation";
 import { SCREEN_WIDTH } from "../src/constants/layout";
 import {
   addToHistory,
@@ -62,18 +63,22 @@ export default function QRCodeScanner() {
   const {
     scanned,
     scannedData,
+    scannedExtra,
     handleBarCodeScanned,
     resetScanner,
     setScanned,
     setScannedData,
+    setScannedExtra,
   } = useScanner();
 
   const [noQrFound, setNoQrFound] = useState(false);
+  const [noInternet, setNoInternet] = useState(false);
 
   // Wrapper to bridge the image scanner hook with the scanner state
-  const handleImageScanSuccess = (data: string) => {
+  const handleImageScanSuccess = (data: string, extra?: QrExtra) => {
     setScanned(true);
     setScannedData(data);
+    setScannedExtra(extra);
   };
 
   const { isScanningImage, pickImage } = useImageScanner(
@@ -88,7 +93,7 @@ export default function QRCodeScanner() {
   const handleChipPress = () => {
     if (!scannedData) return;
 
-    const parsedPayload = parseQrPayload(scannedData);
+    const parsedPayload = parseQrPayload(scannedData, scannedExtra);
 
     if (parsedPayload.type === "url") {
       setAppState("confirmingAnalysis");
@@ -104,7 +109,7 @@ export default function QRCodeScanner() {
             rawPayload: scannedData,
             result: {
               status: "info",
-              message: `${parsedPayload.label} QR code detected. This content is not analyzed for link security.`,
+              message: `${parsedPayload.label} QR code detected. This content was not analyzed for security.`,
               risk_score: 0,
             },
           });
@@ -183,6 +188,7 @@ export default function QRCodeScanner() {
 
       <ResultChip
         data={scanned ? scannedData : null}
+        extra={scannedExtra}
         onPress={handleChipPress}
         onClose={handleReset}
       />
@@ -205,6 +211,7 @@ export default function QRCodeScanner() {
       <ResultModal
         visible={appState === "displayingText"}
         data={scannedData}
+        extra={scannedExtra}
         onClose={handleReset}
         onScanAnother={handleReset}
       />
@@ -213,7 +220,14 @@ export default function QRCodeScanner() {
         visible={appState === "confirmingAnalysis"}
         url={scannedData}
         onClose={() => setAppState("scanning")}
-        onAnalyze={() => setAppState("analyzing")}
+        onAnalyze={async () => {
+          const net = await Network.getNetworkStateAsync();
+          if (!net.isConnected || !net.isInternetReachable) {
+            setNoInternet(true);
+            return;
+          }
+          setAppState("analyzing");
+        }}
       />
 
       <SecurityScanModal
@@ -221,6 +235,32 @@ export default function QRCodeScanner() {
         url={scannedData}
         onClose={handleReset}
       />
+
+      <Modal
+        visible={noInternet}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setNoInternet(false)}
+      >
+        <View style={styles.noQrOverlay}>
+          <View style={styles.noQrCard}>
+            <View style={styles.noQrIconCircle}>
+              <Ionicons name="cloud-offline-outline" size={36} color={colors.warning} />
+            </View>
+            <Text style={styles.noQrTitle}>No Internet Connection</Text>
+            <Text style={styles.noQrSubtitle}>
+              Please check your connection and try again.
+            </Text>
+            <TouchableOpacity
+              style={styles.noQrButton}
+              onPress={() => setNoInternet(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.noQrButtonText}>Got It</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={noQrFound}

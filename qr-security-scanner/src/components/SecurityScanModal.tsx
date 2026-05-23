@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Linking,
+  Share,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -41,6 +42,10 @@ import { normalizeWebUrl } from "../utils/validation";
 import ScanResultView from "./ScanResultView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+const ANALYZING_SHEET_HEIGHT = SCREEN_HEIGHT * 0.60;
+const COLLAPSED_RESULT_SHEET_HEIGHT = SCREEN_HEIGHT * 0.60;
+const EXPANDED_RESULT_SHEET_HEIGHT = SCREEN_HEIGHT * 0.88;
+
 interface SecurityScanModalProps {
   visible: boolean;
   url: string | null;
@@ -48,77 +53,6 @@ interface SecurityScanModalProps {
 }
 
 // ── Sticky footer ─────────────────────────────────────────────
-
-interface FooterProps {
-  status: "safe" | "danger" | "suspicious";
-  onOpenLink: () => void;
-  onClose: () => void;
-}
-
-function StickyFooter({ status, onOpenLink, onClose }: FooterProps) {
-  const insets = useSafeAreaInsets();
-  return (
-    <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-      <View style={styles.footerSeparator} />
-      <View style={styles.footerButtons}>
-        {status === "safe" ? (
-          <>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={onClose}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.secondaryBtnText}>Done</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: colors.success }]}
-              onPress={onOpenLink}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.primaryBtnText}>Open Link</Text>
-              <Ionicons
-                name="open-outline"
-                size={16}
-                color={colors.white}
-                style={{ marginLeft: 6 }}
-              />
-            </TouchableOpacity>
-          </>
-        ) : (
-          <>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={onOpenLink}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.secondaryBtnText,
-                  { color: colors.error, fontSize: 13 },
-                ]}
-              >
-                Proceed Anyway
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: colors.error }]}
-              onPress={onClose}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.primaryBtnText}>Go Back</Text>
-              <Ionicons
-                name="arrow-back-circle-outline"
-                size={16}
-                color={colors.white}
-                style={{ marginLeft: 6 }}
-              />
-            </TouchableOpacity>
-          </>
-        )}
-      </View>
-    </View>
-  );
-}
 
 // ── Shield spinner ────────────────────────────────────────────
 
@@ -140,7 +74,7 @@ function ShieldSpinner() {
       -1,
       false,
     );
-  }, []);
+  }, [rotation, scale]);
 
   const spinStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotation.value}deg` }],
@@ -180,14 +114,14 @@ export default function SecurityScanModal({
   const normalizedUrl = normalizeWebUrl(activeUrl) ?? activeUrl;
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<
-    "analyzing" | "safe" | "danger" | "suspicious" | "error"
+    "analyzing" | "safe" | "danger" | "suspicious" | "unreachable" | "error"
   >("analyzing");
   const [message, setMessage] = useState<string>("");
   const [riskScore, setRiskScore] = useState<number>(0);
   const [details, setDetails] = useState<ScanDetails | null>(null);
-  const [showDangerConfirm, setShowDangerConfirm] = useState(false);
+  const [showRiskConfirm, setShowRiskConfirm] = useState(false);
   const [showErrorConfirm, setShowErrorConfirm] = useState(false);
-  const sheetHeight = useSharedValue(SCREEN_HEIGHT * 0.60);
+  const sheetHeight = useSharedValue(ANALYZING_SHEET_HEIGHT);
 
   const sheetAnimatedStyle = useAnimatedStyle(() => ({
     minHeight: sheetHeight.value,
@@ -195,7 +129,7 @@ export default function SecurityScanModal({
 
   const handleExpandedChange = (expanded: boolean) => {
     sheetHeight.value = withSpring(
-      expanded ? SCREEN_HEIGHT * 0.88 : SCREEN_HEIGHT * 0.60,
+      expanded ? EXPANDED_RESULT_SHEET_HEIGHT : COLLAPSED_RESULT_SHEET_HEIGHT,
       { damping: 32, stiffness: 160 },
     );
   };
@@ -210,7 +144,7 @@ export default function SecurityScanModal({
       setMessage("Performing security analysis...");
       setRiskScore(0);
       setDetails(null);
-      sheetHeight.value = withTiming(SCREEN_HEIGHT * 0.60, { duration: 0 });
+      sheetHeight.value = withTiming(ANALYZING_SHEET_HEIGHT, { duration: 0 });
 
       try {
         const result: ScanResult = await scanURL(url);
@@ -221,6 +155,9 @@ export default function SecurityScanModal({
         setMessage(result.message);
         setRiskScore(result.risk_score ?? 0);
         setDetails(result.details ?? null);
+        sheetHeight.value = withTiming(COLLAPSED_RESULT_SHEET_HEIGHT, {
+          duration: 220,
+        });
 
         loadHistoryEnabled()
           .then((enabled) => {
@@ -241,6 +178,8 @@ export default function SecurityScanModal({
 
         if (result.status === "safe") {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } else if (result.status === "unreachable") {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         } else {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
@@ -261,7 +200,7 @@ export default function SecurityScanModal({
     return () => {
       isMounted = false;
     };
-  }, [visible, url]);
+  }, [visible, url, sheetHeight]);
 
   const openLink = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -273,9 +212,9 @@ export default function SecurityScanModal({
   };
 
   const handleOpenLink = () => {
-    if (status === "danger") {
+    if (status === "danger" || status === "suspicious") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      setShowDangerConfirm(true);
+      setShowRiskConfirm(true);
     } else {
       openLink();
     }
@@ -286,11 +225,17 @@ export default function SecurityScanModal({
     onClose();
   };
 
+  const handleShareLink = async () => {
+    if (!normalizedUrl) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Share.share({ message: normalizedUrl, title: "Safe link" });
+  };
+
   // Don't mount at all until we've had a URL at least once
   if (!activeUrl && !visible) return null;
 
   const isResult =
-    status === "safe" || status === "danger" || status === "suspicious";
+    status === "safe" || status === "danger" || status === "suspicious" || status === "unreachable";
   const isError = status === "error";
 
   return (
@@ -387,11 +332,9 @@ export default function SecurityScanModal({
                 riskScore={riskScore}
                 details={details}
                 onExpandedChange={handleExpandedChange}
-              />
-              <StickyFooter
-                status={status}
                 onOpenLink={handleOpenLink}
-                onClose={handleClose}
+                onScanAnother={handleClose}
+                onShareLink={handleShareLink}
               />
             </Animated.View>
           ) : null}
@@ -450,27 +393,51 @@ export default function SecurityScanModal({
 
       {/* ── Danger confirmation dialog ── */}
       <Modal
-        visible={showDangerConfirm}
+        visible={showRiskConfirm}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowDangerConfirm(false)}
+        onRequestClose={() => setShowRiskConfirm(false)}
       >
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
-            <View style={styles.confirmIconCircle}>
-              <Ionicons name="warning" size={32} color={colors.error} />
+            <View
+              style={[
+                styles.confirmIconCircle,
+                status === "suspicious" && { backgroundColor: colors.warningBg },
+              ]}
+            >
+              <Ionicons
+                name="warning"
+                size={32}
+                color={status === "danger" ? colors.error : colors.warning}
+              />
             </View>
 
-            <Text style={styles.confirmTitle}>Dangerous Website</Text>
+            <Text style={styles.confirmTitle}>
+              {status === "danger" ? "Dangerous Website" : "Suspicious Website"}
+            </Text>
             <Text style={styles.confirmBody}>
-              Our analysis flagged this link as malicious. Opening it may expose
-              you to phishing, malware, or data theft.
+              {status === "danger"
+                ? "Our analysis flagged this link as malicious. Opening it may expose you to phishing, malware, or data theft."
+                : "Our analysis found suspicious patterns. Open this link only if you trust the source."}
             </Text>
 
-            <View style={styles.confirmUrlPill}>
-              <Ionicons name="warning-outline" size={12} color={colors.error} />
+            <View
+              style={[
+                styles.confirmUrlPill,
+                status === "suspicious" && { backgroundColor: colors.warningBg },
+              ]}
+            >
+              <Ionicons
+                name="warning-outline"
+                size={12}
+                color={status === "danger" ? colors.error : colors.warning}
+              />
               <Text
-                style={styles.confirmUrlText}
+                style={[
+                  styles.confirmUrlText,
+                  status === "suspicious" && { color: colors.warning },
+                ]}
                 numberOfLines={1}
                 ellipsizeMode="middle"
               >
@@ -481,15 +448,21 @@ export default function SecurityScanModal({
             <View style={styles.confirmButtons}>
               <TouchableOpacity
                 style={styles.confirmSecondaryBtn}
-                onPress={() => setShowDangerConfirm(false)}
+                onPress={() => setShowRiskConfirm(false)}
                 activeOpacity={0.7}
               >
                 <Text style={styles.confirmSecondaryBtnText}>Go Back</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.confirmPrimaryBtn}
+                style={[
+                  styles.confirmPrimaryBtn,
+                  status === "suspicious" && {
+                    backgroundColor: colors.warning,
+                    shadowColor: colors.warning,
+                  },
+                ]}
                 onPress={() => {
-                  setShowDangerConfirm(false);
+                  setShowRiskConfirm(false);
                   openLink();
                 }}
                 activeOpacity={0.8}
@@ -516,8 +489,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: SCREEN_HEIGHT * 0.88,
-    minHeight: SCREEN_HEIGHT * 0.60,
+    maxHeight: EXPANDED_RESULT_SHEET_HEIGHT,
+    minHeight: ANALYZING_SHEET_HEIGHT,
   },
   resultContainer: {
     flex: 1,
@@ -587,18 +560,10 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flexShrink: 1,
   },
-  footer: {
-    backgroundColor: colors.white,
-  },
   footerSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.cardBorder,
     marginBottom: 12,
-  },
-  footerButtons: {
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 20,
   },
   secondaryBtn: {
     flex: 1,

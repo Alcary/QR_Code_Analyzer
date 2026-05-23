@@ -78,13 +78,32 @@ export async function saveHistory(items: HistoryItem[]): Promise<void> {
 }
 
 /**
- * Prepend a new item to history.
- * Silently drops the oldest entries when the list exceeds MAX_ITEMS.
+ * Upsert an item into history.
+ * Re-scanning the same payload refreshes the existing entry and moves it to
+ * the top instead of creating duplicate rows.
  */
 export async function addToHistory(item: HistoryItem): Promise<void> {
   const current = await loadHistory();
-  const updated = [item, ...current].slice(0, MAX_ITEMS);
+  const itemKey = getHistoryItemKey(item);
+  const existing = current.find((entry) => getHistoryItemKey(entry) === itemKey);
+  const refreshedItem = existing ? { ...item, id: existing.id } : item;
+  const updated = [
+    refreshedItem,
+    ...current.filter((entry) => getHistoryItemKey(entry) !== itemKey),
+  ].slice(0, MAX_ITEMS);
   await saveHistory(updated);
+}
+
+function getHistoryItemKey(item: HistoryItem): string {
+  if (item.normalizedUrl) {
+    return `url:${normalizeHistoryValue(item.normalizedUrl)}`;
+  }
+
+  return `payload:${normalizeHistoryValue(item.rawPayload)}`;
+}
+
+function normalizeHistoryValue(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 /** Remove a single history item by id. */

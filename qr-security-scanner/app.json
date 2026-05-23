@@ -4,7 +4,7 @@
     "slug": "qr-security-scanner",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "myapp",
+    "scheme": "safeqr",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "icon": "./assets/images/app-icon.png",
@@ -43,6 +43,19 @@
         }
       ],
       "expo-web-browser",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow $(PRODUCT_NAME) to save contacts from QR codes."
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow $(PRODUCT_NAME) to add calendar events from QR codes.",
+          "remindersPermission": false
+        }
+      ],
       "expo-font"
     ],
     "experiments": {

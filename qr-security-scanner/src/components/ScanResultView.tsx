@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   LayoutAnimation,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { scannerColors as colors } from "../constants/theme";
 import type { ScanDetails, RiskFactor } from "../services/apiService";
@@ -20,6 +21,7 @@ import TrustIndicator from "./TrustIndicator";
 import ExplainabilityCard from "./ExplainabilityCard";
 import NetworkBadge from "./NetworkBadge";
 import AnalysisLayers from "./AnalysisLayers";
+import SummaryChip from "./SummaryChip";
 
 // ── Verdict config (plain-English, user-facing) ───────────────
 
@@ -38,37 +40,25 @@ const VERDICT_CONFIG = {
     sentence:
       "This link shows signs of being malicious. We recommend not opening it.",
   },
+  unreachable: {
+    headline: "Site Unreachable",
+    sentence:
+      "This site couldn't be reached. It may be down, expired, or no longer active.",
+  },
 } as const;
-
-// ── Summary chip (shown in the details toggle) ────────────────
-
-function SummaryChip({ ok, label }: { ok: boolean | null; label: string }) {
-  const color =
-    ok === null ? colors.textSecondary : ok ? colors.success : colors.warning;
-  const icon =
-    ok === null
-      ? ("remove-circle-outline" as const)
-      : ok
-        ? ("checkmark-circle" as const)
-        : ("alert-circle" as const);
-
-  return (
-    <View style={[styles.chip, { backgroundColor: `${color}15` }]}>
-      <Ionicons name={icon} size={11} color={color} />
-      <Text style={[styles.chipText, { color }]}>{label}</Text>
-    </View>
-  );
-}
 
 // ── Props ─────────────────────────────────────────────────────
 
 interface ScanResultViewProps {
   url: string;
-  status: "safe" | "danger" | "suspicious";
+  status: "safe" | "danger" | "suspicious" | "unreachable";
   message: string;
   riskScore: number;
   details: ScanDetails | null;
   onExpandedChange?: (expanded: boolean) => void;
+  onOpenLink: () => void;
+  onScanAnother: () => void;
+  onShareLink: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────────
@@ -80,8 +70,12 @@ export default function ScanResultView({
   riskScore,
   details,
   onExpandedChange,
+  onOpenLink,
+  onScanAnother,
+  onShareLink,
 }: ScanResultViewProps) {
   const [expanded, setExpanded] = useState(false);
+  const insets = useSafeAreaInsets();
 
   const verdict = VERDICT_CONFIG[status];
   const statusColor =
@@ -89,7 +83,9 @@ export default function ScanResultView({
       ? colors.success
       : status === "danger"
         ? colors.error
-        : colors.warning;
+        : status === "suspicious"
+          ? colors.warning
+          : colors.textSecondary;
 
   const ml = details?.ml;
   const domain = details?.domain;
@@ -111,18 +107,30 @@ export default function ScanResultView({
       )
     : null;
   const hasDetails = !!(domain || network || ml || riskFactors.length > 0);
+  const openButtonColor =
+    status === "danger"
+      ? colors.error
+      : status === "suspicious"
+        ? colors.warning
+        : status === "unreachable"
+          ? colors.textSecondary
+          : colors.primary;
 
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingBottom: Math.max(insets.bottom, 16) },
+      ]}
+      scrollEnabled={expanded}
       showsVerticalScrollIndicator={false}
-      bounces={false}
+      bounces={expanded}
     >
       {/* ═══ LAYER 1 — Always visible ═══════════════════════════ */}
 
       <View style={styles.layer1}>
-        <RiskScoreRing score={riskScore} status={status} size={110} />
+        <RiskScoreRing score={riskScore} status={status} size={100} />
 
         <Text style={[styles.verdictHeadline, { color: statusColor }]}>
           {verdict.headline}
@@ -137,7 +145,9 @@ export default function ScanResultView({
                 ? "lock-closed"
                 : status === "danger"
                   ? "warning"
-                  : "globe-outline"
+                  : status === "unreachable"
+                    ? "cloud-offline-outline"
+                    : "globe-outline"
             }
             size={14}
             color={status === "danger" ? colors.error : colors.textSecondary}
@@ -289,6 +299,47 @@ export default function ScanResultView({
           )}
         </>
       )}
+
+      <View
+        style={[
+          styles.actionsSection,
+          status !== "safe" && styles.actionsSectionNoShare,
+        ]}
+      >
+        <View style={styles.mainActions}>
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: openButtonColor }]}
+            onPress={onOpenLink}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Open Link</Text>
+            <Ionicons
+              name="open-outline"
+              size={18}
+              color={colors.white}
+              style={{ marginLeft: 6 }}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.scanAnotherButton}
+            onPress={onScanAnother}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.scanAnotherButtonText}>Scan Another</Text>
+          </TouchableOpacity>
+        </View>
+
+        {status === "safe" && (
+          <TouchableOpacity
+            style={styles.shareButton}
+            onPress={onShareLink}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="share-social-outline" size={18} color={colors.primary} />
+            <Text style={styles.shareButtonText}>Share</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </ScrollView>
   );
 }
@@ -301,15 +352,14 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 48,
-    paddingBottom: 12,
+    paddingTop: 36,
   },
 
   // ─ Layer 1
   layer1: {
     alignItems: "center",
-    paddingTop: 8,
-    paddingBottom: 12,
+    paddingTop: 4,
+    paddingBottom: 10,
   },
   verdictHeadline: {
     fontSize: 24,
@@ -324,7 +374,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 20,
     paddingHorizontal: 12,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   urlContainer: {
     flexDirection: "row",
@@ -376,20 +426,62 @@ const styles = StyleSheet.create({
     gap: 6,
     flexWrap: "wrap",
   },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 20,
-  },
-  chipText: {
-    fontSize: 11,
-    fontWeight: "600",
-  },
-
   // ─ Layer 2
+  actionsSection: {
+    marginTop: 12,
+    gap: 10,
+  },
+  actionsSectionNoShare: {
+    marginTop: 56,
+  },
+  mainActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    minHeight: 52,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  scanAnotherButton: {
+    flex: 1,
+    minHeight: 52,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: colors.success,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scanAnotherButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  shareButton: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.primary}30`,
+    backgroundColor: colors.white,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  shareButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.primary,
+  },
   serverMessage: {
     fontSize: 13,
     color: colors.textSecondary,

@@ -12,6 +12,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -28,13 +29,32 @@ import {
   loadHistory,
   removeHistoryItem,
   type HistoryItem,
+  type StoredScanResult,
 } from "../src/storage/historyStore";
 import RiskScoreRing from "../src/components/RiskScoreRing";
 import TrustIndicator from "../src/components/TrustIndicator";
 import NetworkBadge from "../src/components/NetworkBadge";
 import AnalysisLayers from "../src/components/AnalysisLayers";
 import type { RiskFactor } from "../src/services/apiService";
-import { normalizeWebUrl, parseQrPayload } from "../src/utils/validation";
+import {
+  normalizeWebUrl,
+  parseQrPayload,
+  type ParsedQrPayload,
+} from "../src/utils/validation";
+import {
+  buildMailtoUrl,
+  buildMapsUrl,
+  buildPayloadSummary,
+  buildPhoneUrl,
+  buildShareText,
+  buildSmsUrl,
+  createCalendarEvent,
+  extractWifiPasswordFromPayload,
+  getFieldValue,
+  presentContactForm,
+} from "../src/utils/qrActions";
+import SummaryChip from "../src/components/SummaryChip";
+import { showNativeActionFallback } from "../src/utils/nativeActionFallback";
 
 // ── Severity helpers ──────────────────────────────────────────
 
@@ -59,6 +79,16 @@ function sortBySeverity(factors: RiskFactor[]): RiskFactor[] {
   );
 }
 
+function formatHeaderDateTime(isoString: string): string {
+  return new Date(isoString).toLocaleString(undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 // ── Status config ─────────────────────────────────────────────
 
 const STATUS_CONFIG = {
@@ -70,26 +100,12 @@ const STATUS_CONFIG = {
     label: "Not Analyzed",
     icon: "information-circle",
   },
+  unreachable: {
+    color: colors.textSecondary,
+    label: "Unreachable",
+    icon: "cloud-offline",
+  },
 } as const;
-
-// ── Summary chip ──────────────────────────────────────────────
-
-function SummaryChip({ ok, label }: { ok: boolean | null; label: string }) {
-  const color =
-    ok === null ? colors.textSecondary : ok ? colors.success : colors.warning;
-  const icon =
-    ok === null
-      ? ("remove-circle-outline" as const)
-      : ok
-        ? ("checkmark-circle" as const)
-        : ("alert-circle" as const);
-  return (
-    <View style={[styles.chip, { backgroundColor: `${color}15` }]}>
-      <Ionicons name={icon} size={11} color={color} />
-      <Text style={[styles.chipText, { color }]}>{label}</Text>
-    </View>
-  );
-}
 
 // ── Screen ────────────────────────────────────────────────────
 
@@ -100,7 +116,7 @@ export default function HistoryDetailScreen() {
   const [item, setItem] = useState<HistoryItem | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showDangerConfirm, setShowDangerConfirm] = useState(false);
+  const [showRiskConfirm, setShowRiskConfirm] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -115,14 +131,14 @@ export default function HistoryDetailScreen() {
     });
   }, [id]);
 
+  const parsedPayload = item ? parseQrPayload(item.rawPayload) : null;
+  const openableUrl = item
+    ? item.normalizedUrl ?? parsedPayload?.normalizedUrl ?? undefined
+    : undefined;
+
   const openLink = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const url =
-      item?.normalizedUrl ??
-      (item?.rawPayload
-        ? parseQrPayload(item.rawPayload).normalizedUrl
-        : null) ??
-      normalizeWebUrl(item?.rawPayload);
+    const url = openableUrl ?? normalizeWebUrl(item?.rawPayload);
     if (url) {
       const supported = await Linking.canOpenURL(url);
       if (supported) await Linking.openURL(url);
@@ -130,9 +146,9 @@ export default function HistoryDetailScreen() {
   };
 
   const handleOpenLink = () => {
-    if (item?.result?.status === "danger") {
+    if (item?.result?.status === "danger" || item?.result?.status === "suspicious") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      setShowDangerConfirm(true);
+      setShowRiskConfirm(true);
     } else {
       openLink();
     }
@@ -141,6 +157,128 @@ export default function HistoryDetailScreen() {
   const handleCopyText = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await Clipboard.setStringAsync(item?.rawPayload ?? "");
+  };
+
+  const handleCopyValue = async (value: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Clipboard.setStringAsync(value);
+  };
+
+  const handleShare = async () => {
+    if (!parsedPayload) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Share.share({
+      message: buildShareText(parsedPayload, openableUrl),
+      title: parsedPayload.label,
+    });
+  };
+
+  const handleOpenEmail = async () => {
+    if (!parsedPayload) return;
+    const mailtoUrl = buildMailtoUrl(parsedPayload);
+    if (mailtoUrl) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await Linking.openURL(mailtoUrl);
+    }
+  };
+
+  const handleCallPhone = async () => {
+    if (!parsedPayload) return;
+    const phoneUrl = buildPhoneUrl(parsedPayload);
+    if (phoneUrl) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await Linking.openURL(phoneUrl);
+    }
+  };
+
+  const handleSendSms = async () => {
+    if (!parsedPayload) return;
+    const smsUrl = buildSmsUrl(parsedPayload);
+    if (smsUrl) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await Linking.openURL(smsUrl);
+    }
+  };
+
+  const handleOpenMaps = async () => {
+    if (!parsedPayload) return;
+    const mapsUrl = buildMapsUrl(parsedPayload);
+    if (mapsUrl) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await Linking.openURL(mapsUrl);
+    }
+  };
+
+  const handleConnectWifi = async () => {
+    if (!parsedPayload) return;
+    const password = extractWifiPasswordFromPayload(parsedPayload.raw);
+    if (password) {
+      await Clipboard.setStringAsync(password);
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    if (Platform.OS === "android" && Linking.sendIntent) {
+      await Linking.sendIntent("android.settings.WIFI_SETTINGS");
+      return;
+    }
+
+    if (Platform.OS === "ios") {
+      const wifiSettingsUrl = "App-Prefs:WIFI";
+      const canOpenWifiSettings = await Linking.canOpenURL(wifiSettingsUrl);
+      if (canOpenWifiSettings) {
+        await Linking.openURL(wifiSettingsUrl);
+        return;
+      }
+    }
+
+    await Linking.openSettings();
+  };
+
+  const handleSaveContact = async () => {
+    if (!parsedPayload) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await presentContactForm(parsedPayload);
+      return;
+    } catch (error) {
+      await handleCopyValue(buildPayloadSummary(parsedPayload));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showNativeActionFallback({
+        error,
+        title: "Could Not Open Contacts",
+        permissionBody:
+          "Contacts permission is needed to save this contact. The contact details were copied instead.",
+        blockedBody:
+          "Contacts permission is turned off for this app. Open Settings to enable it. The contact details were copied instead.",
+        unavailableBody:
+          "Contacts are not available in this app build. Reinstall the latest APK if you just added this feature. The contact details were copied instead.",
+        fallbackBody: "The contact details were copied instead.",
+      });
+    }
+  };
+
+  const handleAddEvent = async () => {
+    if (!parsedPayload) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await createCalendarEvent(parsedPayload);
+      return;
+    } catch (error) {
+      await handleCopyValue(buildPayloadSummary(parsedPayload));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showNativeActionFallback({
+        error,
+        title: "Could Not Open Calendar",
+        permissionBody:
+          "Calendar permission is needed to add this event. The event details were copied instead.",
+        blockedBody:
+          "Calendar permission is turned off for this app. Open Settings to enable it. The event details were copied instead.",
+        unavailableBody:
+          "Calendar is not available in this app build. Reinstall the latest APK if you just added this feature. The event details were copied instead.",
+        fallbackBody: "The event details were copied instead.",
+      });
+    }
   };
 
   const handleDeletePress = () => {
@@ -166,7 +304,7 @@ export default function HistoryDetailScreen() {
     );
   }
 
-  if (!item) {
+  if (!item || !parsedPayload) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.primary} />
@@ -180,14 +318,11 @@ export default function HistoryDetailScreen() {
   const domain = details?.domain;
   const network = details?.network;
   const browser = details?.browser;
-  const parsedPayload = parseQrPayload(item.rawPayload);
   const riskFactors = sortBySeverity(details?.risk_factors ?? []);
   const status = result.status;
   const statusCfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.suspicious;
   const score = result.risk_score ?? 0;
-  const openableUrl = item.normalizedUrl ?? parsedPayload.normalizedUrl;
-  const displayUrl =
-    openableUrl ?? normalizeWebUrl(item.rawPayload) ?? item.rawPayload;
+  const displayValue = openableUrl ?? parsedPayload.displayValue;
   const hasDetails = !!(domain || network || ml || riskFactors.length > 0);
   const domainOk = domain
     ? ["trusted", "moderate"].includes(domain.reputation_tier)
@@ -200,6 +335,22 @@ export default function HistoryDetailScreen() {
         network.http_status < 400
       )
     : null;
+  const historyActions = getHistoryActions({
+    parsedPayload,
+    openableUrl,
+    status,
+    handleOpenLink,
+    handleConnectWifi,
+    handleOpenEmail,
+    handleCallPhone,
+    handleSendSms,
+    handleOpenMaps,
+    handleSaveContact,
+    handleAddEvent,
+    handleShare,
+    handleCopyText,
+    handleCopyValue,
+  });
 
   return (
     <View style={styles.root}>
@@ -245,46 +396,78 @@ export default function HistoryDetailScreen() {
 
       {/* ─── Danger confirmation modal ─── */}
       <Modal
-        visible={showDangerConfirm}
+        visible={showRiskConfirm}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowDangerConfirm(false)}
+        onRequestClose={() => setShowRiskConfirm(false)}
       >
         <Pressable
           style={styles.modalBackdrop}
-          onPress={() => setShowDangerConfirm(false)}
+          onPress={() => setShowRiskConfirm(false)}
         >
           <Pressable style={styles.modalCard} onPress={() => {}}>
-            <View style={[styles.modalIconWrap, { borderRadius: 34, width: 68, height: 68 }]}>
-              <Ionicons name="warning" size={32} color={colors.error} />
+            <View
+              style={[
+                styles.modalIconWrap,
+                { borderRadius: 34, width: 68, height: 68 },
+                status === "suspicious" && { backgroundColor: colors.warningBg },
+              ]}
+            >
+              <Ionicons
+                name="warning"
+                size={32}
+                color={status === "danger" ? colors.error : colors.warning}
+              />
             </View>
-            <Text style={styles.modalTitle}>Dangerous Website</Text>
-            <Text style={styles.modalBody}>
-              Our analysis flagged this link as malicious. Opening it may expose
-              you to phishing, malware, or data theft.
+            <Text style={styles.modalTitle}>
+              {status === "danger" ? "Dangerous Website" : "Suspicious Website"}
             </Text>
-            <View style={styles.dangerUrlPill}>
-              <Ionicons name="warning-outline" size={12} color={colors.error} />
+            <Text style={styles.modalBody}>
+              {status === "danger"
+                ? "Our analysis flagged this link as malicious. Opening it may expose you to phishing, malware, or data theft."
+                : "Our analysis found suspicious patterns. Open this link only if you trust the source."}
+            </Text>
+            <View
+              style={[
+                styles.dangerUrlPill,
+                status === "suspicious" && { backgroundColor: colors.warningBg },
+              ]}
+            >
+              <Ionicons
+                name="warning-outline"
+                size={12}
+                color={status === "danger" ? colors.error : colors.warning}
+              />
               <Text
-                style={styles.dangerUrlPillText}
+                style={[
+                  styles.dangerUrlPillText,
+                  status === "suspicious" && { color: colors.warning },
+                ]}
                 numberOfLines={1}
                 ellipsizeMode="middle"
               >
-                {displayUrl}
+                {displayValue}
               </Text>
             </View>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, styles.modalBtnCancel]}
-                onPress={() => setShowDangerConfirm(false)}
+                onPress={() => setShowRiskConfirm(false)}
                 activeOpacity={0.7}
               >
                 <Text style={styles.modalBtnCancelText}>Go Back</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalBtn, styles.modalBtnDestruct]}
+                style={[
+                  styles.modalBtn,
+                  styles.modalBtnDestruct,
+                  status === "suspicious" && {
+                    backgroundColor: colors.warning,
+                    borderColor: colors.warning,
+                  },
+                ]}
                 onPress={() => {
-                  setShowDangerConfirm(false);
+                  setShowRiskConfirm(false);
                   openLink();
                 }}
                 activeOpacity={0.7}
@@ -307,7 +490,7 @@ export default function HistoryDetailScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Scan Detail</Text>
         <Text style={styles.headerTime}>
-          {new Date(item.createdAt).toLocaleString()}
+          {formatHeaderDateTime(item.createdAt)}
         </Text>
       </View>
 
@@ -340,7 +523,7 @@ export default function HistoryDetailScreen() {
             </Text>
             {details?.analysis_time_ms != null && (
               <Text style={styles.timingText}>
-                Analysed in {(details.analysis_time_ms / 1000).toFixed(1)}s
+                Analyzed in {(details.analysis_time_ms / 1000).toFixed(1)}s
               </Text>
             )}
           </View>
@@ -360,7 +543,7 @@ export default function HistoryDetailScreen() {
               color={colors.textSecondary}
             />
             <Text style={styles.urlText} selectable>
-              {displayUrl}
+              {displayValue}
             </Text>
           </View>
           {!item.normalizedUrl && parsedPayload.fields.length > 0 && (
@@ -376,7 +559,7 @@ export default function HistoryDetailScreen() {
               ))}
             </View>
           )}
-          {item.rawPayload !== displayUrl && (
+          {item.rawPayload !== displayValue && (
             <View style={[styles.urlBox, { marginTop: 6 }]}>
               <Ionicons
                 name="qr-code-outline"
@@ -535,47 +718,105 @@ export default function HistoryDetailScreen() {
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={styles.footerSeparator} />
         <View style={styles.footerButtons}>
-          {openableUrl &&
-            (status === "safe" ||
-              status === "suspicious" ||
-              status === "danger") && (
-              <TouchableOpacity
-                style={[
-                  styles.openBtn,
-                  {
-                    backgroundColor:
-                      status === "safe"
-                        ? colors.success
-                        : status === "danger"
-                          ? colors.error
-                          : colors.warning,
-                  },
-                ]}
-                onPress={handleOpenLink}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="open-outline" size={16} color={colors.white} />
-                <Text style={styles.openBtnText}>Open URL</Text>
-              </TouchableOpacity>
-            )}
-          {status === "info" && (
+          {historyActions.primary && (
             <TouchableOpacity
-              style={styles.copyBtn}
-              onPress={handleCopyText}
+              style={[
+                styles.openBtn,
+                { backgroundColor: historyActions.primary.color },
+              ]}
+              onPress={historyActions.primary.onPress}
               activeOpacity={0.8}
             >
-              <Ionicons name="copy-outline" size={16} color={colors.primary} />
-              <Text style={styles.copyBtnText}>Copy Text</Text>
+              <Ionicons
+                name={historyActions.primary.icon}
+                size={16}
+                color={colors.white}
+              />
+              <Text style={styles.openBtnText}>
+                {historyActions.primary.label}
+              </Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            style={styles.deleteBtn}
-            onPress={handleDeletePress}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="trash-outline" size={16} color={colors.error} />
-            <Text style={styles.deleteBtnText}>Delete This Entry</Text>
-          </TouchableOpacity>
+          {historyActions.copy && (
+            <View style={styles.secondaryActions}>
+              <TouchableOpacity
+                style={styles.secondaryActionBtn}
+                onPress={historyActions.copy.onPress}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={historyActions.copy.icon}
+                  size={17}
+                  color={colors.primary}
+                />
+                <Text style={styles.secondaryActionText} numberOfLines={1}>
+                  {formatSecondaryActionLabel(historyActions.copy.label)}
+                </Text>
+              </TouchableOpacity>
+              {historyActions.share && (
+                <TouchableOpacity
+                  style={styles.secondaryActionBtn}
+                  onPress={historyActions.share.onPress}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={historyActions.share.icon}
+                    size={17}
+                    color={colors.primary}
+                  />
+                  <Text style={styles.secondaryActionText} numberOfLines={1}>
+                    Share
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.secondaryActionBtn, styles.secondaryDangerBtn]}
+                onPress={handleDeletePress}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="trash-outline" size={17} color={colors.error} />
+                <Text
+                  style={[styles.secondaryActionText, styles.secondaryDangerText]}
+                  numberOfLines={1}
+                >
+                  Delete
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {!historyActions.copy && (
+            <View style={styles.secondaryActions}>
+              {historyActions.share && (
+                <TouchableOpacity
+                  style={styles.secondaryActionBtn}
+                  onPress={historyActions.share.onPress}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={historyActions.share.icon}
+                    size={17}
+                    color={colors.primary}
+                  />
+                  <Text style={styles.secondaryActionText} numberOfLines={1}>
+                    Share
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.secondaryActionBtn, styles.secondaryDangerBtn]}
+                onPress={handleDeletePress}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="trash-outline" size={17} color={colors.error} />
+                <Text
+                  style={[styles.secondaryActionText, styles.secondaryDangerText]}
+                  numberOfLines={1}
+                >
+                  Delete
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -583,6 +824,268 @@ export default function HistoryDetailScreen() {
 }
 
 // ── Styles ────────────────────────────────────────────────────
+
+type HistoryAction = {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color?: string;
+  onPress: () => void | Promise<void>;
+};
+
+function formatSecondaryActionLabel(label: string): string {
+  if (label === "Copy Password") return "Password";
+  if (label === "Copy Coordinates") return "Coords";
+  if (label.startsWith("Copy ")) return "Copy";
+  return label;
+}
+
+function getHistoryActions({
+  parsedPayload,
+  openableUrl,
+  status,
+  handleOpenLink,
+  handleConnectWifi,
+  handleOpenEmail,
+  handleCallPhone,
+  handleSendSms,
+  handleOpenMaps,
+  handleSaveContact,
+  handleAddEvent,
+  handleShare,
+  handleCopyText,
+  handleCopyValue,
+}: {
+  parsedPayload: ParsedQrPayload;
+  openableUrl?: string;
+  status: StoredScanResult["status"];
+  handleOpenLink: () => void;
+  handleConnectWifi: () => Promise<void>;
+  handleOpenEmail: () => Promise<void>;
+  handleCallPhone: () => Promise<void>;
+  handleSendSms: () => Promise<void>;
+  handleOpenMaps: () => Promise<void>;
+  handleSaveContact: () => Promise<void>;
+  handleAddEvent: () => Promise<void>;
+  handleShare: () => Promise<void>;
+  handleCopyText: () => Promise<void>;
+  handleCopyValue: (value: string) => Promise<void>;
+}): { primary: HistoryAction | null; copy: HistoryAction | null; share: HistoryAction | null } {
+  if (openableUrl && ["safe", "suspicious", "danger", "unreachable"].includes(status)) {
+    return {
+      primary: {
+        label: "Open Link",
+        icon: "open-outline",
+        color:
+          status === "safe"
+            ? colors.success
+            : status === "danger"
+              ? colors.error
+              : status === "suspicious"
+                ? colors.warning
+                : colors.textSecondary,
+        onPress: handleOpenLink,
+      },
+      copy: {
+        label: "Copy Link",
+        icon: "copy-outline",
+        onPress: () => handleCopyValue(openableUrl),
+      },
+      share:
+        status === "safe"
+          ? {
+              label: "Share Link",
+              icon: "share-social-outline",
+              onPress: handleShare,
+            }
+          : null,
+    };
+  }
+
+  const textPrimary: HistoryAction = {
+    label: "Copy Text",
+    icon: "copy-outline",
+    color: colors.primary,
+    onPress: handleCopyText,
+  };
+
+  switch (parsedPayload.type) {
+    case "wifi": {
+      const password = extractWifiPasswordFromPayload(parsedPayload.raw);
+      return {
+        primary: {
+          label: "Connect",
+          icon: "wifi-outline",
+          color: colors.primary,
+          onPress: handleConnectWifi,
+        },
+        copy: {
+          label: password ? "Copy Password" : "Copy Network Info",
+          icon: "copy-outline",
+          onPress: () => handleCopyValue(password || parsedPayload.raw),
+        },
+        share: {
+          label: "Share Network",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    }
+    case "email": {
+      const address = getFieldValue(parsedPayload, "Address");
+      return {
+        primary: {
+          label: "Open Email",
+          icon: "mail-outline",
+          color: colors.primary,
+          onPress: handleOpenEmail,
+        },
+        copy: address
+          ? {
+              label: "Copy Email",
+              icon: "copy-outline",
+              onPress: () => handleCopyValue(address),
+            }
+          : null,
+        share: {
+          label: "Share Email",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    }
+    case "phone": {
+      const number = getFieldValue(parsedPayload, "Number");
+      return {
+        primary: {
+          label: "Call",
+          icon: "call-outline",
+          color: colors.primary,
+          onPress: handleCallPhone,
+        },
+        copy: number
+          ? {
+              label: "Copy Number",
+              icon: "copy-outline",
+              onPress: () => handleCopyValue(number),
+            }
+          : null,
+        share: {
+          label: "Share Number",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    }
+    case "sms": {
+      const number = getFieldValue(parsedPayload, "Number");
+      const message = getFieldValue(parsedPayload, "Message");
+      return {
+        primary: {
+          label: "Send SMS",
+          icon: "chatbubble-outline",
+          color: colors.primary,
+          onPress: handleSendSms,
+        },
+        copy:
+          message || number
+            ? {
+                label: message ? "Copy Message" : "Copy Number",
+                icon: "copy-outline",
+                onPress: () => handleCopyValue(message || number),
+              }
+            : null,
+        share: {
+          label: "Share SMS",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    }
+    case "geo": {
+      const latitude = getFieldValue(parsedPayload, "Latitude");
+      const longitude = getFieldValue(parsedPayload, "Longitude");
+      const coordinates = latitude && longitude ? `${latitude}, ${longitude}` : "";
+      return {
+        primary: {
+          label: "Open Maps",
+          icon: "map-outline",
+          color: colors.primary,
+          onPress: handleOpenMaps,
+        },
+        copy: coordinates
+          ? {
+              label: "Copy Coordinates",
+              icon: "copy-outline",
+              onPress: () => handleCopyValue(coordinates),
+            }
+          : null,
+        share: {
+          label: "Share Location",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    }
+    case "contact":
+      return {
+        primary: {
+          label: "Save Contact",
+          icon: "person-add-outline",
+          color: colors.primary,
+          onPress: handleSaveContact,
+        },
+        copy: {
+          label: "Copy Contact",
+          icon: "copy-outline",
+          onPress: () => handleCopyValue(buildPayloadSummary(parsedPayload)),
+        },
+        share: {
+          label: "Share Contact",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    case "calendar":
+      return {
+        primary: {
+          label: "Add Event",
+          icon: "calendar-outline",
+          color: colors.primary,
+          onPress: handleAddEvent,
+        },
+        copy: {
+          label: "Copy Event",
+          icon: "copy-outline",
+          onPress: () => handleCopyValue(buildPayloadSummary(parsedPayload)),
+        },
+        share: {
+          label: "Share Event",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    case "text":
+      return {
+        primary: textPrimary,
+        copy: null,
+        share: {
+          label: "Share Text",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+    default:
+      return {
+        primary: textPrimary,
+        copy: null,
+        share: {
+          label: "Share",
+          icon: "share-social-outline",
+          onPress: handleShare,
+        },
+      };
+  }
+}
 
 const HEADER_TOP =
   Platform.OS === "ios" ? 54 : (StatusBar.currentHeight ?? 0) + 12;
@@ -813,18 +1316,6 @@ const styles = StyleSheet.create({
     gap: 6,
     flexWrap: "wrap",
   },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 20,
-  },
-  chipText: {
-    fontSize: 11,
-    fontWeight: "600",
-  },
   // ── Network ──
   networkGrid: {
     flexDirection: "row",
@@ -838,11 +1329,11 @@ const styles = StyleSheet.create({
   footerSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.cardBorder,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   footerButtons: {
     paddingHorizontal: 16,
-    gap: 10,
+    gap: 8,
   },
   // ── Open button ──
   openBtn: {
@@ -858,36 +1349,31 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.white,
   },
-  copyBtn: {
+  secondaryActions: {
     flexDirection: "row",
+    gap: 8,
+  },
+  secondaryActionBtn: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    borderRadius: 14,
-    paddingVertical: 14,
+    gap: 4,
+    borderRadius: 12,
+    paddingVertical: 9,
     borderWidth: 1,
     borderColor: `${colors.primary}30`,
     backgroundColor: colors.white,
+    minHeight: 46,
   },
-  copyBtnText: {
-    fontSize: 15,
+  secondaryActionText: {
+    fontSize: 12,
     fontWeight: "700",
     color: colors.primary,
   },
-  deleteBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderRadius: 14,
-    paddingVertical: 14,
-    borderWidth: 1,
+  secondaryDangerBtn: {
     borderColor: `${colors.error}30`,
-    backgroundColor: colors.white,
   },
-  deleteBtnText: {
-    fontSize: 15,
-    fontWeight: "700",
+  secondaryDangerText: {
     color: colors.error,
   },
   modalBackdrop: {

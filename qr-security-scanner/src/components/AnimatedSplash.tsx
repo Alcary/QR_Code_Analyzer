@@ -28,6 +28,8 @@ const DOT_BR = 8;       // data dot border radius
 const ORBIT_R = 180;
 // cos/sin 45° — positions each piece on a diagonal from the centre
 const D = ORBIT_R * 0.707;
+const SPRING_CONFIG = { damping: 14, stiffness: 95 };
+const STAGGER_MS = 60;
 
 // ─── Sub-components ────────────────────────────────────────────────────────
 
@@ -77,23 +79,19 @@ export default function AnimatedSplash({ onFinish }: Props) {
   const textTranslateY = useSharedValue(14);
   const containerOpacity = useSharedValue(1);
 
-  const spring = { damping: 14, stiffness: 95 };
-  // ms between each piece flying in
-  const STAGGER = 60;
-
   useEffect(() => {
     // Each piece springs into position from its orbital start, staggered
-    tlX.value = withSpring(0, spring);
-    tlY.value = withSpring(0, spring);
+    tlX.value = withSpring(0, SPRING_CONFIG);
+    tlY.value = withSpring(0, SPRING_CONFIG);
 
-    trX.value = withDelay(STAGGER, withSpring(0, spring));
-    trY.value = withDelay(STAGGER, withSpring(0, spring));
+    trX.value = withDelay(STAGGER_MS, withSpring(0, SPRING_CONFIG));
+    trY.value = withDelay(STAGGER_MS, withSpring(0, SPRING_CONFIG));
 
-    blX.value = withDelay(STAGGER * 2, withSpring(0, spring));
-    blY.value = withDelay(STAGGER * 2, withSpring(0, spring));
+    blX.value = withDelay(STAGGER_MS * 2, withSpring(0, SPRING_CONFIG));
+    blY.value = withDelay(STAGGER_MS * 2, withSpring(0, SPRING_CONFIG));
 
-    brX.value = withDelay(STAGGER * 3, withSpring(0, spring));
-    brY.value = withDelay(STAGGER * 3, withSpring(0, spring));
+    brX.value = withDelay(STAGGER_MS * 3, withSpring(0, SPRING_CONFIG));
+    brY.value = withDelay(STAGGER_MS * 3, withSpring(0, SPRING_CONFIG));
 
     // Title fades up after pieces have settled
     textOpacity.value = withDelay(850, withTiming(1, { duration: 500 }));
@@ -106,7 +104,20 @@ export default function AnimatedSplash({ onFinish }: Props) {
         if (finished) runOnJS(onFinish)();
       }),
     );
-  }, []);
+  }, [
+    blX,
+    blY,
+    brX,
+    brY,
+    containerOpacity,
+    onFinish,
+    textOpacity,
+    textTranslateY,
+    tlX,
+    tlY,
+    trX,
+    trY,
+  ]);
 
   const tlStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: tlX.value }, { translateY: tlY.value }],
