@@ -119,14 +119,12 @@ export default function ScanResultView({
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={[
-        styles.scrollContent,
-        { paddingBottom: Math.max(insets.bottom, 16) },
-      ]}
+      contentContainerStyle={styles.scrollContent}
       scrollEnabled={expanded}
       showsVerticalScrollIndicator={false}
       bounces={expanded}
     >
+      <View>
       {/* ═══ LAYER 1 — Always visible ═══════════════════════════ */}
 
       <View style={styles.layer1}>
@@ -135,7 +133,7 @@ export default function ScanResultView({
         <Text style={[styles.verdictHeadline, { color: statusColor }]}>
           {verdict.headline}
         </Text>
-        <Text style={styles.verdictSentence}>{verdict.sentence}</Text>
+        <Text style={styles.verdictSentence}>{message || verdict.sentence}</Text>
 
         {/* URL pill */}
         <View style={styles.urlContainer}>
@@ -299,11 +297,12 @@ export default function ScanResultView({
           )}
         </>
       )}
+      </View>
 
       <View
         style={[
           styles.actionsSection,
-          status !== "safe" && styles.actionsSectionNoShare,
+          { paddingBottom: Math.max(insets.bottom, 16) },
         ]}
       >
         <View style={styles.mainActions}>
@@ -353,6 +352,8 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 36,
+    flexGrow: 1,
+    justifyContent: "space-between",
   },
 
   // ─ Layer 1
@@ -428,11 +429,7 @@ const styles = StyleSheet.create({
   },
   // ─ Layer 2
   actionsSection: {
-    marginTop: 12,
     gap: 10,
-  },
-  actionsSectionNoShare: {
-    marginTop: 56,
   },
   mainActions: {
     flexDirection: "row",

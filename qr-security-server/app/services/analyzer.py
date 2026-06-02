@@ -110,12 +110,12 @@ class URLAnalyzer:
             )
             if is_private:
                 logger.warning("SSRF blocked: %s resolves to private/reserved IP", initial_host)
-                return self._result("danger", "SSRF attempt blocked — URL targets internal network", risk_score=1.0)
+                return self._result("danger", "This URL points to a private or local network address (such as a router or local device). It cannot be analyzed.", risk_score=1.0)
         except Exception as exc:
             # Pre-check executor failure — cannot confirm safety, so block.
             # Failing open here would let a private-IP URL bypass the SSRF gate.
             logger.warning("SSRF pre-check failed for %s (%s) — blocking for safety", url, exc)
-            return self._result("danger", "SSRF pre-check failed — blocked for safety", risk_score=1.0)
+            return self._result("danger", "This URL could not be verified as safe to analyze and was blocked.", risk_score=1.0)
 
         # ── 4. Browser Analysis (primary) + Network Checks ──
         # Strategy:
@@ -525,7 +525,7 @@ class URLAnalyzer:
 
         # Hard override: SSRF attempt — URL targeted internal/private network
         if net.http.error in ("ssrf_blocked", "ssrf_check_failed"):
-            return "danger", "SSRF attempt blocked — URL targets internal network"
+            return "danger", "This URL points to a private or local network address and was blocked."
 
         # Availability issue: actual server error (5xx range only)
         # Non-standard codes like 999 (LinkedIn anti-bot) are not server errors

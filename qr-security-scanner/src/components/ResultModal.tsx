@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { View, Text, Modal, TouchableOpacity, StyleSheet, Platform, Linking, Share } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
@@ -25,6 +25,15 @@ import {
 } from '../utils/qrActions';
 import { showNativeActionFallback } from '../utils/nativeActionFallback';
 
+function ModalContentWrapper({ children }: { children: React.ReactNode }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+      {children}
+    </View>
+  );
+}
+
 interface ResultModalProps {
   visible: boolean;
   data: string | null;
@@ -34,7 +43,6 @@ interface ResultModalProps {
 }
 
 export default function ResultModal({ visible, data, extra, onClose, onScanAnother }: ResultModalProps) {
-  const insets = useSafeAreaInsets();
   const parsedPayload = parseQrPayload(data, extra);
   const isWifiPayload = parsedPayload.type === "wifi";
   const isEmailPayload = parsedPayload.type === "email";
@@ -229,8 +237,9 @@ export default function ResultModal({ visible, data, extra, onClose, onScanAnoth
       animationType="slide"
       onRequestClose={onClose}
     >
+      <SafeAreaProvider>
       <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+        <ModalContentWrapper>
           <View style={styles.modalHeader}>
             <View style={styles.titleBlock}>
               <Text style={styles.modalEyebrow}>{parsedPayload.label}</Text>
@@ -292,8 +301,9 @@ export default function ResultModal({ visible, data, extra, onClose, onScanAnoth
               <Text style={styles.shareButtonText}>Share</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </ModalContentWrapper>
       </View>
+      </SafeAreaProvider>
     </Modal>
   );
 }

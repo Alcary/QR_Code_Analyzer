@@ -40,7 +40,35 @@ import {
 } from "../storage/historyStore";
 import { normalizeWebUrl } from "../utils/validation";
 import ScanResultView from "./ScanResultView";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+
+function ErrorFooterButtons({
+  onOpenAnyway,
+  onClose,
+}: {
+  onOpenAnyway: () => void;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.errorFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+      <View style={styles.footerSeparator} />
+      <View style={styles.errorButtons}>
+        <TouchableOpacity style={styles.secondaryBtn} onPress={onOpenAnyway} activeOpacity={0.7}>
+          <Text style={[styles.secondaryBtnText, { fontSize: 13 }]}>Open Anyway</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.primaryBtn, { backgroundColor: colors.warning }]}
+          onPress={onClose}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.primaryBtnText}>Go Back</Text>
+          <Ionicons name="arrow-back-circle-outline" size={16} color={colors.white} style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 const ANALYZING_SHEET_HEIGHT = SCREEN_HEIGHT * 0.60;
 const COLLAPSED_RESULT_SHEET_HEIGHT = SCREEN_HEIGHT * 0.60;
@@ -112,7 +140,6 @@ export default function SecurityScanModal({
 
   const activeUrl = cachedUrl;
   const normalizedUrl = normalizeWebUrl(activeUrl) ?? activeUrl;
-  const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<
     "analyzing" | "safe" | "danger" | "suspicious" | "unreachable" | "error"
   >("analyzing");
@@ -245,6 +272,7 @@ export default function SecurityScanModal({
       animationType="slide"
       onRequestClose={handleClose}
     >
+      <SafeAreaProvider>
       <View style={styles.overlay}>
         <Animated.View style={[styles.sheet, sheetAnimatedStyle]}>
           <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
@@ -292,36 +320,13 @@ export default function SecurityScanModal({
                   This URL has not been analyzed. Proceed only if you trust the source.
                 </Text>
               </View>
-              <View style={[styles.errorFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-                <View style={styles.footerSeparator} />
-                <View style={styles.errorButtons}>
-                  <TouchableOpacity
-                    style={styles.secondaryBtn}
-                    onPress={() => {
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                      setShowErrorConfirm(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.secondaryBtnText, { fontSize: 13 }]}>
-                      Open Anyway
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.primaryBtn, { backgroundColor: colors.warning }]}
-                    onPress={handleClose}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.primaryBtnText}>Go Back</Text>
-                    <Ionicons
-                      name="arrow-back-circle-outline"
-                      size={16}
-                      color={colors.white}
-                      style={{ marginLeft: 6 }}
-                    />
-                  </TouchableOpacity>
-                </View>
-              </View>
+              <ErrorFooterButtons
+                onOpenAnyway={() => {
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                  setShowErrorConfirm(true);
+                }}
+                onClose={handleClose}
+              />
             </Animated.View>
           ) : isResult ? (
             <Animated.View entering={FadeIn.duration(200)} style={styles.resultContainer}>
@@ -340,6 +345,7 @@ export default function SecurityScanModal({
           ) : null}
         </Animated.View>
       </View>
+      </SafeAreaProvider>
 
       {/* ── Error "Open Anyway" confirmation dialog ── */}
       <Modal

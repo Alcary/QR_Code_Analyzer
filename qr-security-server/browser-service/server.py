@@ -35,6 +35,7 @@ PORT = int(os.environ.get("PORT", "3000"))
 # so 5 fits comfortably within the container's 1 GB memory limit.
 # Should match BROWSER_MAX_CONCURRENT in the API server config.
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "5"))
+ACQUIRE_TIMEOUT_MS = int(os.environ.get("ACQUIRE_TIMEOUT_MS", "3000"))
 
 # Private / reserved ranges that sub-requests must never reach.
 _PRIVATE_NETS = [
@@ -561,23 +562,28 @@ async def handle_analyze(request: web.Request) -> web.Response:
 
     logger.info("Analyzing: %s", url[:120])
 
-    # Enforce concurrency limit — reject immediately when at capacity.
-    # locked() is synchronous (no yield point), so the check and acquire
-    # are effectively atomic within the single-threaded event loop.
-    if _analyze_semaphore is not None and _analyze_semaphore.locked():
-        logger.warning("At capacity (%d concurrent) — rejecting /analyze request", MAX_CONCURRENT)
-        return web.json_response(
-            {
-                "success": False,
-                "error": f"Server at capacity ({MAX_CONCURRENT} concurrent analyses). Retry shortly.",
-            },
-            status=503,
-            headers={"Retry-After": "5"},
-        )
-
     context = None
+    acquired = False
     if _analyze_semaphore is not None:
-        await _analyze_semaphore.acquire()
+        try:
+            await asyncio.wait_for(
+                _analyze_semaphore.acquire(),
+                timeout=ACQUIRE_TIMEOUT_MS / 1000,
+            )
+            acquired = True
+        except asyncio.TimeoutError:
+            logger.warning(
+                "At capacity (%d concurrent) — timed out waiting for an analysis slot",
+                MAX_CONCURRENT,
+            )
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": f"Server at capacity ({MAX_CONCURRENT} concurrent analyses). Retry shortly.",
+                },
+                status=503,
+                headers={"Retry-After": "5"},
+            )
     try:
         # Each analysis gets a fresh, isolated browser context
         context = await _browser.new_context(
@@ -630,7 +636,7 @@ async def handle_analyze(request: web.Request) -> web.Response:
                 await context.close()
             except Exception as close_err:
                 logger.warning("Failed to close browser context: %s", close_err)
-        if _analyze_semaphore is not None:
+        if acquired and _analyze_semaphore is not None:
             _analyze_semaphore.release()
 
 
